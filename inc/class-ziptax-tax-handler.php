@@ -22,11 +22,20 @@ class ZipTax_Tax_Handler {
 	private static $instance = null;
 
 	/**
-	 * The current tax rate data from the API, keyed by cache key.
+	 * The current (general) tax rate data from the API.
 	 *
 	 * @var array|null
 	 */
 	private $current_rate_data = null;
+
+	/**
+	 * In-memory cache of all API rate lookups during this request.
+	 *
+	 * Keyed by cache key string, values are normalized API responses.
+	 *
+	 * @var array
+	 */
+	private $rate_memory_cache = array();
 
 	/**
 	 * The WooCommerce tax rate ID for the current rate.
@@ -189,10 +198,10 @@ class ZipTax_Tax_Handler {
 	private function get_tax_rate( array $address, $tic = 0 ) {
 		$cache_key = $this->build_cache_key( $address, $tic );
 
-		// In-memory cache (same page request).
-		if ( null !== $this->current_rate_data && ( $this->current_rate_data['_cache_key'] ?? '' ) === $cache_key ) {
+		// In-memory cache (same page request) — works for both general and TIC lookups.
+		if ( isset( $this->rate_memory_cache[ $cache_key ] ) ) {
 			ZipTax_WooCommerce::log( 'Using in-memory cached rate.' );
-			return $this->current_rate_data;
+			return $this->rate_memory_cache[ $cache_key ];
 		}
 
 		// WooCommerce session cache.
@@ -201,6 +210,7 @@ class ZipTax_Tax_Handler {
 			if ( is_array( $session_data ) ) {
 				ZipTax_WooCommerce::log( 'Using session cached rate.' );
 				$session_data['_cache_key'] = $cache_key;
+				$this->rate_memory_cache[ $cache_key ] = $session_data;
 				return $session_data;
 			}
 		}
@@ -211,6 +221,7 @@ class ZipTax_Tax_Handler {
 			ZipTax_WooCommerce::log( 'Using transient cached rate.' );
 			$transient_data['_cache_key'] = $cache_key;
 
+			$this->rate_memory_cache[ $cache_key ] = $transient_data;
 			if ( WC()->session ) {
 				WC()->session->set( $cache_key, $transient_data );
 			}
@@ -242,9 +253,10 @@ class ZipTax_Tax_Handler {
 			return null;
 		}
 
-		// Cache the result.
+		// Cache the result at all three tiers.
 		$result['_cache_key'] = $cache_key;
 
+		$this->rate_memory_cache[ $cache_key ] = $result;
 		if ( WC()->session ) {
 			WC()->session->set( $cache_key, $result );
 		}
@@ -258,51 +270,55 @@ class ZipTax_Tax_Handler {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Find or create a WooCommerce tax rate row.
+	 * Unique tax rate name used to identify ZipTax-managed rate rows.
 	 *
-	 * Uses country + state + city + postcode to uniquely identify rates,
-	 * preventing race conditions between concurrent users in different cities.
+	 * @var string
+	 */
+	const RATE_NAME = 'ZipTax Sales Tax';
+
+	/**
+	 * Find or create the single ZipTax dynamic tax rate row.
+	 *
+	 * Uses a single row identified by the RATE_NAME constant, updating it
+	 * with the current customer's rate on each request. Since rates are
+	 * injected via `woocommerce_find_rates`, the DB row is mainly needed
+	 * for its ID — a single reusable row avoids table bloat.
 	 *
 	 * @param float  $rate     Decimal rate (e.g. 0.0775).
 	 * @param string $state    State code.
 	 * @param string $city     City name.
-	 * @param string $postcode Postal code.
 	 * @param string $country  Country code.
 	 * @param bool   $shipping Whether this rate applies to shipping.
 	 * @return int Tax rate ID.
 	 */
-	private function get_or_create_tax_rate_id( $rate, $state, $city, $postcode, $country, $shipping = false ) {
+	private function get_or_create_tax_rate_id( $rate, $state, $city, $country, $shipping = false ) {
 		global $wpdb;
 
-		$rate_pct  = round( $rate * 100, 4 );
+		$rate_pct   = round( $rate * 100, 4 );
 		$city_upper = strtoupper( $city );
+		$ship_flag  = $shipping ? 1 : 0;
 
-		// Look up by country + state + city + name to avoid cross-city collisions.
+		// Look for our single managed row by the unique rate name.
 		$existing = $wpdb->get_var( $wpdb->prepare(
 			"SELECT tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates
-			 WHERE tax_rate_country = %s
-			   AND tax_rate_state = %s
-			   AND tax_rate_city = %s
-			   AND tax_rate_name = %s
+			 WHERE tax_rate_name = %s
 			   AND tax_rate_class = ''
 			 LIMIT 1",
-			$country,
-			$state,
-			$city_upper,
-			'Sales Tax'
+			self::RATE_NAME
 		) );
-
-		$ship_flag = $shipping ? 1 : 0;
 
 		if ( $existing ) {
 			$wpdb->update(
 				$wpdb->prefix . 'woocommerce_tax_rates',
 				array(
+					'tax_rate_country'  => $country,
+					'tax_rate_state'    => $state,
+					'tax_rate_city'     => $city_upper,
 					'tax_rate'          => $rate_pct,
 					'tax_rate_shipping' => $ship_flag,
 				),
 				array( 'tax_rate_id' => $existing ),
-				array( '%f', '%d' ),
+				array( '%s', '%s', '%s', '%f', '%d' ),
 				array( '%d' )
 			);
 			ZipTax_WooCommerce::log( sprintf( 'Updated tax rate ID %d to %.4f%%', $existing, $rate_pct ) );
@@ -315,7 +331,7 @@ class ZipTax_Tax_Handler {
 				'tax_rate_country'  => $country,
 				'tax_rate_state'    => $state,
 				'tax_rate_city'     => $city_upper,
-				'tax_rate_name'     => 'Sales Tax',
+				'tax_rate_name'     => self::RATE_NAME,
 				'tax_rate'          => $rate_pct,
 				'tax_rate_priority' => 1,
 				'tax_rate_compound' => 0,
@@ -409,7 +425,6 @@ class ZipTax_Tax_Handler {
 			$sales_rate,
 			$rate_data['state'] ?? $address['state'],
 			$rate_data['city'] ?? $address['city'],
-			$rate_data['postcode'] ?? $address['postcode'],
 			$address['country'],
 			$this->tax_shipping
 		);
@@ -445,6 +460,14 @@ class ZipTax_Tax_Handler {
 
 		$country = $args['country'] ?? '';
 		if ( ! $this->is_supported_country( $country ) ) {
+			return $matched_tax_rates;
+		}
+
+		// Respect WooCommerce tax classes — only override the standard class.
+		// Products assigned "Zero Rate", "Reduced Rate", or other custom classes
+		// should keep their WooCommerce-configured rates unless a TIC code is used.
+		$tax_class = $args['tax_class'] ?? '';
+		if ( '' !== $tax_class && 'standard' !== $tax_class ) {
 			return $matched_tax_rates;
 		}
 
@@ -519,77 +542,77 @@ class ZipTax_Tax_Handler {
 
 		self::$is_calculating = true;
 
-		// Fetch TIC rates and adjust individual items.
-		$tax_adjustment = 0.0;
-		$tic_cache      = array(); // tic => rate|null
+		try {
+			// Fetch TIC rates and adjust individual items.
+			$tax_adjustment = 0.0;
+			$tic_cache      = array(); // tic => rate|null
 
-		foreach ( $cart->get_cart() as $cart_key => $cart_item ) {
-			$product = $cart_item['data'];
-			if ( ! $product || ! $product->is_taxable() ) {
-				continue;
-			}
-
-			$tic = (int) $product->get_meta( '_ziptax_tic_code' );
-			if ( $tic <= 0 ) {
-				continue;
-			}
-
-			// Fetch the TIC rate (cached per-TIC).
-			if ( ! array_key_exists( $tic, $tic_cache ) ) {
-				$tic_data = $this->get_tax_rate( $address, $tic );
-				if ( $tic_data && isset( $tic_data['product_tax_rate'] ) ) {
-					$tic_cache[ $tic ] = (float) $tic_data['product_tax_rate'];
-				} else {
-					$tic_cache[ $tic ] = null; // Use general rate.
+			foreach ( $cart->get_cart() as $cart_key => $cart_item ) {
+				$product = $cart_item['data'];
+				if ( ! $product || ! $product->is_taxable() ) {
+					continue;
 				}
+
+				$tic = (int) $product->get_meta( '_ziptax_tic_code' );
+				if ( $tic <= 0 ) {
+					continue;
+				}
+
+				// Fetch the TIC rate (cached per-TIC).
+				if ( ! array_key_exists( $tic, $tic_cache ) ) {
+					$tic_data = $this->get_tax_rate( $address, $tic );
+					if ( $tic_data && isset( $tic_data['product_tax_rate'] ) ) {
+						$tic_cache[ $tic ] = (float) $tic_data['product_tax_rate'];
+					} else {
+						$tic_cache[ $tic ] = null; // Use general rate.
+					}
+				}
+
+				$tic_rate = $tic_cache[ $tic ];
+				if ( null === $tic_rate || abs( $tic_rate - $sales_rate ) < 0.000001 ) {
+					continue; // Same as general rate, no adjustment needed.
+				}
+
+				ZipTax_WooCommerce::log( sprintf( 'TIC %d: adjusting rate from %.4f to %.4f', $tic, $sales_rate, $tic_rate ) );
+
+				$line_total    = (float) $cart_item['line_total'];
+				$line_subtotal = (float) $cart_item['line_subtotal'];
+
+				$old_tax     = wc_round_tax_total( $line_total * $sales_rate );
+				$new_tax     = wc_round_tax_total( $line_total * $tic_rate );
+				$new_sub_tax = wc_round_tax_total( $line_subtotal * $tic_rate );
+
+				$cart->cart_contents[ $cart_key ]['line_tax']     = $new_tax;
+				$cart->cart_contents[ $cart_key ]['line_tax_data'] = array(
+					'total'    => array( $rate_id => $new_tax ),
+					'subtotal' => array( $rate_id => $new_sub_tax ),
+				);
+
+				$tax_adjustment += ( $new_tax - $old_tax );
 			}
 
-			$tic_rate = $tic_cache[ $tic ];
-			if ( null === $tic_rate || abs( $tic_rate - $sales_rate ) < 0.000001 ) {
-				continue; // Same as general rate, no adjustment needed.
+			// If we adjusted any items, update the cart tax totals.
+			if ( abs( $tax_adjustment ) > 0.001 ) {
+				$cart_taxes = $cart->get_cart_contents_taxes();
+				if ( isset( $cart_taxes[ $rate_id ] ) ) {
+					$cart_taxes[ $rate_id ] += $tax_adjustment;
+				}
+				$cart->set_cart_contents_taxes( $cart_taxes );
+
+				// Adjust the total tax by the delta rather than recomputing from scratch.
+				$old_total_tax = (float) $cart->get_total_tax();
+				$cart->set_total_tax( wc_round_tax_total( $old_total_tax + $tax_adjustment ) );
+
+				// Adjust the cart total by the same delta so it stays consistent
+				// with WooCommerce's internal calculations (coupons, fees, etc.).
+				$old_total = (float) $cart->get_total( 'edit' );
+				$cart->set_total( max( 0, round( $old_total + $tax_adjustment, wc_get_price_decimals() ) ) );
+
+				ZipTax_WooCommerce::log( sprintf( 'TIC adjustment: %.2f', $tax_adjustment ) );
 			}
-
-			ZipTax_WooCommerce::log( sprintf( 'TIC %d: adjusting rate from %.4f to %.4f', $tic, $sales_rate, $tic_rate ) );
-
-			$line_total    = (float) $cart_item['line_total'];
-			$line_subtotal = (float) $cart_item['line_subtotal'];
-
-			$old_tax     = wc_round_tax_total( $line_total * $sales_rate );
-			$new_tax     = wc_round_tax_total( $line_total * $tic_rate );
-			$new_sub_tax = wc_round_tax_total( $line_subtotal * $tic_rate );
-
-			$cart->cart_contents[ $cart_key ]['line_tax']     = $new_tax;
-			$cart->cart_contents[ $cart_key ]['line_tax_data'] = array(
-				'total'    => array( $rate_id => $new_tax ),
-				'subtotal' => array( $rate_id => $new_sub_tax ),
-			);
-
-			$tax_adjustment += ( $new_tax - $old_tax );
+		} finally {
+			self::$is_calculating = false;
 		}
-
-		// If we adjusted any items, update the cart tax totals.
-		if ( abs( $tax_adjustment ) > 0.001 ) {
-			$cart_taxes = $cart->get_cart_contents_taxes();
-			if ( isset( $cart_taxes[ $rate_id ] ) ) {
-				$cart_taxes[ $rate_id ] += $tax_adjustment;
-			}
-			$cart->set_cart_contents_taxes( $cart_taxes );
-
-			$new_total_tax = array_sum( $cart_taxes ) + array_sum( $cart->get_shipping_taxes() ) + array_sum( $cart->get_fee_taxes() );
-			$cart->set_total_tax( wc_round_tax_total( $new_total_tax ) );
-
-			// Recalculate the cart total to reflect the tax adjustment.
-			$cart_total = $cart->get_subtotal()
-				- $cart->get_discount_total()
-				+ $cart->get_shipping_total()
-				+ $cart->get_fee_total()
-				+ wc_round_tax_total( $new_total_tax );
-			$cart->set_total( max( 0, round( $cart_total, wc_get_price_decimals() ) ) );
-
-			ZipTax_WooCommerce::log( sprintf( 'TIC adjustment: %.2f', $tax_adjustment ) );
-		}
-
-		self::$is_calculating = false;
 	}
 
 	// ------------------------------------------------------------------

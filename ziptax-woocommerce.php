@@ -154,15 +154,28 @@ final class ZipTax_WooCommerce {
 	}
 
 	/**
-	 * Deactivation hook — clean up transients.
+	 * Deactivation hook — clean up transients, tax rate rows, and options.
 	 */
 	public static function deactivate() {
 		global $wpdb;
+
+		// Remove cached transients.
 		$wpdb->query(
 			"DELETE FROM {$wpdb->options}
 			 WHERE option_name LIKE '_transient_ziptax_%'
 			    OR option_name LIKE '_transient_timeout_ziptax_%'"
 		);
+
+		// Remove ZipTax-generated tax rate rows from wc_tax_rates.
+		if ( class_exists( 'ZipTax_Tax_Handler' ) ) {
+			$wpdb->query( $wpdb->prepare(
+				"DELETE FROM {$wpdb->prefix}woocommerce_tax_rates WHERE tax_rate_name = %s",
+				ZipTax_Tax_Handler::RATE_NAME
+			) );
+		}
+
+		// Allow initial WooCommerce tax configuration to run again on reactivation.
+		delete_option( 'ziptax_wc_tax_configured' );
 	}
 
 	/**
