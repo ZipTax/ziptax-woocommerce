@@ -166,15 +166,37 @@ class ZipTax_API {
 			return new WP_Error( 'ziptax_json_error', __( 'Invalid response from Zip Tax API.', 'ziptax-woocommerce' ) );
 		}
 
-		// Check v60 metadata response code.
-		$api_code = $data['metadata']['response']['code'] ?? null;
+		// Check for API-level errors.
+		// v60 has two response shapes:
+		//   - Address/geo lookups:    metadata.response.code (100 = success)
+		//   - Postal-code-only:       rCode at top level (100 = success)
+		$api_code    = null;
+		$api_message = 'Unknown API error';
+
+		if ( isset( $data['metadata']['response']['code'] ) ) {
+			$api_code    = (int) $data['metadata']['response']['code'];
+			$api_message = $data['metadata']['response']['message'] ?? $api_message;
+		} elseif ( isset( $data['rCode'] ) ) {
+			$api_code    = (int) $data['rCode'];
+			$api_message = $data['rMessage'] ?? $api_message;
+		}
+
 		if ( null !== $api_code && 100 !== $api_code ) {
-			$api_message = $data['metadata']['response']['message'] ?? 'Unknown API error';
 			ZipTax_WooCommerce::log( sprintf( 'API error %d: %s (HTTP %d)', $api_code, $api_message, $http_code ), 'error' );
 			return new WP_Error(
 				'ziptax_api_error',
 				$api_message,
 				array( 'code' => $api_code, 'http_status' => $http_code )
+			);
+		}
+
+		// Also treat non-2xx HTTP status as an error even if no recognizable code.
+		if ( $http_code >= 400 ) {
+			ZipTax_WooCommerce::log( sprintf( 'API HTTP error %d', $http_code ), 'error' );
+			return new WP_Error(
+				'ziptax_http_error',
+				sprintf( __( 'Zip Tax API returned HTTP %d.', 'ziptax-woocommerce' ), $http_code ),
+				array( 'http_status' => $http_code )
 			);
 		}
 
@@ -281,18 +303,11 @@ class ZipTax_API {
 		if ( isset( $data['productDetail'] ) ) {
 			$result['product_detail'] = $data['productDetail'];
 
-			// If product rules provide an effective tax rate, use it instead.
-			$tic_data = $data['productDetail']['taxabilityCode'] ?? array();
-			if ( ! empty( $tic_data['rateRules'] ) ) {
-				$effective_rate = 0.0;
-				foreach ( $tic_data['rateRules'] as $rule ) {
-					$rule_rate     = (float) ( $rule['effectiveTaxRate'] ?? 0.0 );
-					$pct_taxable   = (float) ( $rule['percentTaxable'] ?? 1.0 );
-					$effective_rate = max( $effective_rate, $rule_rate * $pct_taxable );
-				}
-				if ( $effective_rate > 0.0 ) {
-					$result['product_tax_rate'] = $effective_rate;
-				}
+			// When a TIC code is present, the taxSummaries already contains
+			// the correct combined rate accounting for product-specific rules.
+			// We store it as product_tax_rate so the tax handler can use it.
+			if ( $result['sales_tax_rate'] > 0.0 ) {
+				$result['product_tax_rate'] = $result['sales_tax_rate'];
 			}
 		}
 

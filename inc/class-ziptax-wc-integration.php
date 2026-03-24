@@ -33,8 +33,8 @@ class ZipTax_WC_Integration extends WC_Integration {
 		// Save settings action.
 		add_action( 'woocommerce_update_options_integration_' . $this->id, array( $this, 'process_admin_options' ) );
 
-		// After saving, ensure WooCommerce tax settings are configured properly.
-		add_action( 'woocommerce_update_options_integration_' . $this->id, array( $this, 'configure_woocommerce_tax_settings' ) );
+		// On first save, configure WooCommerce tax settings.
+		add_action( 'woocommerce_update_options_integration_' . $this->id, array( $this, 'maybe_configure_woocommerce_tax_settings' ) );
 
 		// Display notice on the WooCommerce Tax settings tab.
 		add_action( 'woocommerce_sections_tax', array( $this, 'tax_section_notice' ), 9 );
@@ -94,11 +94,18 @@ class ZipTax_WC_Integration extends WC_Integration {
 	}
 
 	/**
-	 * Configure WooCommerce core tax settings to work with ZipTax.
+	 * Configure WooCommerce core tax settings on first save only.
 	 *
-	 * Called after our integration settings are saved.
+	 * Sets recommended WooCommerce tax options (enable taxes, display
+	 * settings, rounding, etc.) the first time the integration settings
+	 * are saved. Subsequent saves skip this so admins can customize
+	 * WooCommerce tax display options without them being overwritten.
 	 */
-	public function configure_woocommerce_tax_settings() {
+	public function maybe_configure_woocommerce_tax_settings() {
+		if ( 'yes' === get_option( 'ziptax_wc_tax_configured' ) ) {
+			return;
+		}
+
 		// Enable tax calculations.
 		update_option( 'woocommerce_calc_taxes', 'yes' );
 
@@ -121,6 +128,9 @@ class ZipTax_WC_Integration extends WC_Integration {
 
 		// Don't round tax at subtotal level — apply per-line for accuracy.
 		update_option( 'woocommerce_tax_round_at_subtotal', 'no' );
+
+		// Mark as configured so we don't override on future saves.
+		update_option( 'ziptax_wc_tax_configured', 'yes' );
 	}
 
 	/**

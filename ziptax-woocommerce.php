@@ -63,11 +63,13 @@ final class ZipTax_WooCommerce {
 	}
 
 	/**
-	 * Load required class files.
+	 * Load class files that do not depend on WooCommerce.
+	 *
+	 * Classes that extend WC_Integration are loaded later in init()
+	 * to avoid fatal errors when WooCommerce has not loaded yet.
 	 */
 	private function load_classes() {
 		require_once ZIPTAX_PLUGIN_DIR . 'inc/class-ziptax-api.php';
-		require_once ZIPTAX_PLUGIN_DIR . 'inc/class-ziptax-wc-integration.php';
 		require_once ZIPTAX_PLUGIN_DIR . 'inc/class-ziptax-tax-handler.php';
 		require_once ZIPTAX_PLUGIN_DIR . 'inc/class-ziptax-product-tic.php';
 	}
@@ -80,6 +82,9 @@ final class ZipTax_WooCommerce {
 			add_action( 'admin_notices', array( $this, 'woocommerce_missing_notice' ) );
 			return;
 		}
+
+		// Load the integration class now that WC_Integration is available.
+		require_once ZIPTAX_PLUGIN_DIR . 'inc/class-ziptax-wc-integration.php';
 
 		// Register the WooCommerce integration (settings page).
 		add_filter( 'woocommerce_integrations', array( $this, 'add_integration' ) );

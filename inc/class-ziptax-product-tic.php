@@ -58,8 +58,6 @@ class ZipTax_Product_TIC {
 	 * Add the TIC code field on the product General tab (next to Tax class).
 	 */
 	public function add_tic_field() {
-		global $post;
-
 		woocommerce_wp_text_input( array(
 			'id'          => self::META_KEY,
 			'label'       => __( 'Taxability Code (TIC)', 'ziptax-woocommerce' ),
