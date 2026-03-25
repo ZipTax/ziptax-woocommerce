@@ -65,6 +65,14 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 ## Changelog
 
+### 3.0.1
+
+- Fix: TIC-exempt products (0% rate) now correctly exempt instead of taxed at the general rate.
+- Fix: WooCommerce tax reports now show accurate per-jurisdiction breakdowns.
+- Fix: Cleanup queries use correct column names and support HPOS stores.
+- Fix: Respect WooCommerce tax classes (Zero Rate, Reduced Rate) for non-TIC products.
+- Fix: Improved exception safety and cache consistency for TIC lookups.
+
 ### 3.0.0
 
 - Complete rewrite using Zip Tax API v60.

@@ -3,7 +3,7 @@ Contributors: ziptax
 Tags: ziptax, taxes, tax calculation, automated tax, sales tax, sales tax rates, canada tax, gst, pst, hst
 Requires at least: 6.0
 Tested up to: 6.7
-Stable tag: 3.0.0
+Stable tag: 3.0.2
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
@@ -61,6 +61,13 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 == Changelog ==
 
+= 3.0.1 =
+* Fix: TIC-exempt products (0% rate) now correctly exempt instead of taxed at the general rate.
+* Fix: WooCommerce tax reports now show accurate per-jurisdiction breakdowns.
+* Fix: Cleanup queries use correct column names and support HPOS stores.
+* Fix: Respect WooCommerce tax classes (Zero Rate, Reduced Rate) for non-TIC products.
+* Fix: Improved exception safety and cache consistency for TIC lookups.
+
 = 3.0.0 =
 * Complete rewrite using Zip Tax API v60.
 * Address-level geocoding for precise tax rates.
@@ -79,6 +86,9 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 * Initial release.
 
 == Upgrade Notice ==
+
+= 3.0.1 =
+Bug fixes for TIC-exempt products, tax reporting accuracy, WooCommerce tax class support, and HPOS cleanup compatibility.
 
 = 3.0.0 =
 Major upgrade: now uses Zip Tax API v60 with address geocoding, Canada support, and product taxability codes. Requires PHP 7.4+, WordPress 6.0+, WooCommerce 8.0+.

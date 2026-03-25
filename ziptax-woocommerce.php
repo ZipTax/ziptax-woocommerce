@@ -3,7 +3,7 @@
  * Plugin Name: ZipTax WooCommerce Sales Tax
  * Plugin URI:  https://zip.tax
  * Description: Automated sales tax calculation for WooCommerce using the Zip Tax API v60 with address-level geocoding, product taxability codes (TIC), and US + Canada support.
- * Version:     3.0.0
+ * Version:     3.0.2
  * Author:      Zip Tax
  * Author URI:  https://zip.tax
  * Requires at least: 6.0
@@ -19,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'ZIPTAX_VERSION', '3.0.0' );
+define( 'ZIPTAX_VERSION', '3.0.2' );
 define( 'ZIPTAX_PLUGIN_FILE', __FILE__ );
 define( 'ZIPTAX_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ZIPTAX_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
