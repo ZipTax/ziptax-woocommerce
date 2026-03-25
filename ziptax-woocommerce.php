@@ -154,7 +154,7 @@ final class ZipTax_WooCommerce {
 	}
 
 	/**
-	 * Deactivation hook — clean up transients, tax rate rows, and options.
+	 * Deactivation hook — clean up transients, orphaned tax rate rows, cron, and options.
 	 */
 	public static function deactivate() {
 		global $wpdb;
@@ -166,12 +166,28 @@ final class ZipTax_WooCommerce {
 			    OR option_name LIKE '_transient_timeout_ziptax_%'"
 		);
 
-		// Remove ZipTax-generated tax rate rows from wc_tax_rates.
+		// Remove ZipTax-generated tax rate rows not referenced by any order.
+		// Rows still referenced by orders are kept for reporting accuracy.
 		if ( class_exists( 'ZipTax_Tax_Handler' ) ) {
 			$wpdb->query( $wpdb->prepare(
-				"DELETE FROM {$wpdb->prefix}woocommerce_tax_rates WHERE tax_rate_name = %s",
+				"DELETE tr FROM {$wpdb->prefix}woocommerce_tax_rates tr
+				 WHERE tr.tax_rate_name = %s
+				   AND tr.tax_rate_id NOT IN (
+				       SELECT DISTINCT rate_id
+				       FROM {$wpdb->prefix}woocommerce_order_items oi
+				       INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim
+				           ON oi.order_item_id = oim.order_item_id
+				       WHERE oi.order_item_type = 'tax'
+				         AND oim.meta_key = 'rate_id'
+				   )",
 				ZipTax_Tax_Handler::RATE_NAME
 			) );
+
+			// Unschedule the cleanup cron.
+			$timestamp = wp_next_scheduled( ZipTax_Tax_Handler::CLEANUP_CRON_HOOK );
+			if ( $timestamp ) {
+				wp_unschedule_event( $timestamp, ZipTax_Tax_Handler::CLEANUP_CRON_HOOK );
+			}
 		}
 
 		// Allow initial WooCommerce tax configuration to run again on reactivation.

@@ -71,6 +71,13 @@ class ZipTax_Tax_Handler {
 	}
 
 	/**
+	 * Cron hook name for periodic cleanup of orphaned tax rate rows.
+	 *
+	 * @var string
+	 */
+	const CLEANUP_CRON_HOOK = 'ziptax_cleanup_orphaned_rates';
+
+	/**
 	 * Constructor — register WooCommerce hooks.
 	 */
 	private function __construct() {
@@ -85,6 +92,12 @@ class ZipTax_Tax_Handler {
 
 		// Transfer per-item tax data to order line items at checkout.
 		add_action( 'woocommerce_checkout_create_order_line_item', array( $this, 'set_order_line_item_tax' ), 10, 4 );
+
+		// Schedule daily cleanup of orphaned tax rate rows.
+		add_action( self::CLEANUP_CRON_HOOK, array( $this, 'cleanup_orphaned_rates' ) );
+		if ( ! wp_next_scheduled( self::CLEANUP_CRON_HOOK ) ) {
+			wp_schedule_event( time(), 'daily', self::CLEANUP_CRON_HOOK );
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -272,17 +285,23 @@ class ZipTax_Tax_Handler {
 	/**
 	 * Unique tax rate name used to identify ZipTax-managed rate rows.
 	 *
+	 * All ZipTax-generated rows use this name so they can be identified
+	 * for cleanup purposes and distinguished from manually created rates.
+	 *
 	 * @var string
 	 */
 	const RATE_NAME = 'ZipTax Sales Tax';
 
 	/**
-	 * Find or create the single ZipTax dynamic tax rate row.
+	 * Find or create a per-jurisdiction WooCommerce tax rate row.
 	 *
-	 * Uses a single row identified by the RATE_NAME constant, updating it
-	 * with the current customer's rate on each request. Since rates are
-	 * injected via `woocommerce_find_rates`, the DB row is mainly needed
-	 * for its ID — a single reusable row avoids table bloat.
+	 * Each unique country+state+city combination gets its own row so that
+	 * WooCommerce tax reports, admin order views, and third-party tools
+	 * can display accurate jurisdiction details for historical orders.
+	 *
+	 * The rate percentage is updated on each request to stay current.
+	 * Orphaned rows (not referenced by any order) are cleaned up daily
+	 * by the cleanup_orphaned_rates cron.
 	 *
 	 * @param float  $rate     Decimal rate (e.g. 0.0775).
 	 * @param string $state    State code.
@@ -298,27 +317,30 @@ class ZipTax_Tax_Handler {
 		$city_upper = strtoupper( $city );
 		$ship_flag  = $shipping ? 1 : 0;
 
-		// Look for our single managed row by the unique rate name.
+		// Look for an existing row matching this jurisdiction.
 		$existing = $wpdb->get_var( $wpdb->prepare(
 			"SELECT tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates
 			 WHERE tax_rate_name = %s
+			   AND tax_rate_country = %s
+			   AND tax_rate_state = %s
+			   AND tax_rate_city = %s
 			   AND tax_rate_class = ''
 			 LIMIT 1",
-			self::RATE_NAME
+			self::RATE_NAME,
+			$country,
+			$state,
+			$city_upper
 		) );
 
 		if ( $existing ) {
 			$wpdb->update(
 				$wpdb->prefix . 'woocommerce_tax_rates',
 				array(
-					'tax_rate_country'  => $country,
-					'tax_rate_state'    => $state,
-					'tax_rate_city'     => $city_upper,
 					'tax_rate'          => $rate_pct,
 					'tax_rate_shipping' => $ship_flag,
 				),
 				array( 'tax_rate_id' => $existing ),
-				array( '%s', '%s', '%s', '%f', '%d' ),
+				array( '%f', '%d' ),
 				array( '%d' )
 			);
 			ZipTax_WooCommerce::log( sprintf( 'Updated tax rate ID %d to %.4f%%', $existing, $rate_pct ) );
@@ -348,6 +370,35 @@ class ZipTax_Tax_Handler {
 		WC_Cache_Helper::invalidate_cache_group( 'taxes' );
 
 		return $rate_id;
+	}
+
+	/**
+	 * Remove ZipTax-managed tax rate rows not referenced by any order.
+	 *
+	 * Called daily via WP-Cron. Keeps the wc_tax_rates table clean while
+	 * preserving rows that orders still reference for reporting accuracy.
+	 */
+	public function cleanup_orphaned_rates() {
+		global $wpdb;
+
+		$deleted = $wpdb->query( $wpdb->prepare(
+			"DELETE tr FROM {$wpdb->prefix}woocommerce_tax_rates tr
+			 WHERE tr.tax_rate_name = %s
+			   AND tr.tax_rate_id NOT IN (
+			       SELECT DISTINCT rate_id
+			       FROM {$wpdb->prefix}woocommerce_order_items oi
+			       INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim
+			           ON oi.order_item_id = oim.order_item_id
+			       WHERE oi.order_item_type = 'tax'
+			         AND oim.meta_key = 'rate_id'
+			   )",
+			self::RATE_NAME
+		) );
+
+		if ( $deleted > 0 ) {
+			ZipTax_WooCommerce::log( sprintf( 'Cleaned up %d orphaned tax rate rows.', $deleted ), 'info' );
+			WC_Cache_Helper::invalidate_cache_group( 'taxes' );
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -582,8 +633,9 @@ class ZipTax_Tax_Handler {
 				$new_tax     = wc_round_tax_total( $line_total * $tic_rate );
 				$new_sub_tax = wc_round_tax_total( $line_subtotal * $tic_rate );
 
-				$cart->cart_contents[ $cart_key ]['line_tax']     = $new_tax;
-				$cart->cart_contents[ $cart_key ]['line_tax_data'] = array(
+				$cart->cart_contents[ $cart_key ]['line_tax']          = $new_tax;
+				$cart->cart_contents[ $cart_key ]['line_subtotal_tax'] = $new_sub_tax;
+				$cart->cart_contents[ $cart_key ]['line_tax_data']     = array(
 					'total'    => array( $rate_id => $new_tax ),
 					'subtotal' => array( $rate_id => $new_sub_tax ),
 				);

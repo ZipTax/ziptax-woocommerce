@@ -305,10 +305,9 @@ class ZipTax_API {
 
 			// When a TIC code is present, the taxSummaries already contains
 			// the correct combined rate accounting for product-specific rules.
-			// We store it as product_tax_rate so the tax handler can use it.
-			if ( $result['sales_tax_rate'] > 0.0 ) {
-				$result['product_tax_rate'] = $result['sales_tax_rate'];
-			}
+			// Always set product_tax_rate — including 0.0 for exempt products
+			// (e.g., groceries, clothing, medical supplies in certain states).
+			$result['product_tax_rate'] = $result['sales_tax_rate'];
 		}
 
 		return $result;
