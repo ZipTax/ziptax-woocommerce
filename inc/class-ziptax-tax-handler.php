@@ -400,7 +400,7 @@ class ZipTax_Tax_Handler {
 			&& \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled()
 		) {
 			// HPOS: use the wc_order_tax_lookup table which stores rate_id directly.
-			$referenced_subquery = "SELECT DISTINCT rate_id FROM {$wpdb->prefix}wc_order_tax_lookup";
+			$referenced_subquery = "SELECT DISTINCT tax_rate_id FROM {$wpdb->prefix}wc_order_tax_lookup";
 		} else {
 			// Legacy: rate_id is stored as meta_value in order item meta.
 			$referenced_subquery =
