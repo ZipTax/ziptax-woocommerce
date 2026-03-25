@@ -3,7 +3,7 @@
  * Plugin Name: ZipTax Sales Tax
  * Plugin URI:  https://developers.zip.tax
  * Description: Automated sales tax calculation for WooCommerce using the Zip Tax API v60 with address-level geocoding, product taxability codes (TIC), and US + Canada support.
- * Version:     3.1.0
+ * Version:     3.1.1
  * Author:      Zip Tax
  * Author URI:  https://www.zip.tax
  * Requires at least: 6.0
@@ -18,7 +18,7 @@
  
 defined( 'ABSPATH' ) || exit;
 
-define( 'ZIPTAX_VERSION', '3.1.0' );
+define( 'ZIPTAX_VERSION', '3.1.1' );
 define( 'ZIPTAX_PLUGIN_FILE', __FILE__ );
 define( 'ZIPTAX_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ZIPTAX_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -115,7 +115,7 @@ final class ZipTax_WooCommerce {
 	 */
 	public function plugin_action_links( $links ) {
 		$settings_url  = admin_url( 'admin.php?page=wc-settings&tab=integration&section=ziptax' );
-		$settings_link = '<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Settings', 'ziptax-woocommerce' ) . '</a>';
+		$settings_link = '<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Settings', 'ziptax-sales-tax' ) . '</a>';
 		array_unshift( $links, $settings_link );
 		return $links;
 	}
@@ -134,7 +134,7 @@ final class ZipTax_WooCommerce {
 	 */
 	public function woocommerce_missing_notice() {
 		echo '<div class="error"><p><strong>';
-		echo esc_html__( 'ZipTax WooCommerce Sales Tax requires WooCommerce to be installed and active.', 'ziptax-woocommerce' );
+		echo esc_html__( 'ZipTax Sales Tax requires WooCommerce to be installed and active.', 'ziptax-sales-tax' );
 		echo '</strong></p></div>';
 	}
 
@@ -145,7 +145,7 @@ final class ZipTax_WooCommerce {
 		if ( version_compare( PHP_VERSION, '7.4', '<' ) ) {
 			deactivate_plugins( plugin_basename( __FILE__ ) );
 			wp_die(
-				esc_html__( 'ZipTax WooCommerce requires PHP 7.4 or higher.', 'ziptax-woocommerce' ),
+				esc_html__( 'ZipTax Sales Tax requires PHP 7.4 or higher.', 'ziptax-sales-tax' ),
 				'Plugin Activation Error',
 				array( 'back_link' => true )
 			);
@@ -159,6 +159,7 @@ final class ZipTax_WooCommerce {
 		global $wpdb;
 
 		// Remove cached transients.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->query(
 			"DELETE FROM {$wpdb->options}
 			 WHERE option_name LIKE '_transient_ziptax_%'

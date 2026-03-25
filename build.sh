@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 #
-# Build a WordPress Plugin Directory-ready zip for ZipTax WooCommerce.
+# Build a WordPress Plugin Directory-ready zip for ZipTax Sales Tax.
 #
 # Usage:
-#   ./build.sh          # produces ziptax-woocommerce-3.0.0.zip
+#   ./build.sh          # produces ziptax-sales-tax-3.1.0.zip
 #
 set -euo pipefail
 
-PLUGIN_SLUG="ziptax-woocommerce"
+PLUGIN_SLUG="ziptax-sales-tax"
+MAIN_FILE="ziptax-woocommerce.php"
 
 # Extract version from the main plugin file header.
-VERSION=$(grep -m1 "^ \* Version:" "${PLUGIN_SLUG}.php" | sed 's/.*Version:[[:space:]]*//')
+VERSION=$(grep -m1 "^ \* Version:" "$MAIN_FILE" | sed 's/.*Version:[[:space:]]*//')
 
 if [ -z "$VERSION" ]; then
-  echo "Error: could not read version from ${PLUGIN_SLUG}.php" >&2
+  echo "Error: could not read version from ${MAIN_FILE}" >&2
   exit 1
 fi
 
@@ -26,9 +27,9 @@ echo "Building ${ZIPFILE} ..."
 mkdir -p "$DEST/inc"
 
 # Plugin files.
-cp ziptax-woocommerce.php "$DEST/"
-cp readme.txt             "$DEST/"
-cp inc/*.php              "$DEST/inc/"
+cp "$MAIN_FILE"  "$DEST/"
+cp readme.txt    "$DEST/"
+cp inc/*.php     "$DEST/inc/"
 
 # Optional: languages directory if it exists.
 if [ -d "languages" ]; then

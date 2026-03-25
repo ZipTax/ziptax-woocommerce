@@ -7,7 +7,7 @@
  * checkout, shipping, and fee tax calculations internally — including
  * the block-based checkout and REST API.
  *
- * @package ZipTax_WooCommerce
+ * @package ZipTax_Sales_Tax
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -318,6 +318,7 @@ class ZipTax_Tax_Handler {
 		$ship_flag  = $shipping ? 1 : 0;
 
 		// Look for an existing row matching this jurisdiction.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$existing = $wpdb->get_var( $wpdb->prepare(
 			"SELECT tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates
 			 WHERE tax_rate_name = %s
@@ -333,6 +334,7 @@ class ZipTax_Tax_Handler {
 		) );
 
 		if ( $existing ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			$wpdb->update(
 				$wpdb->prefix . 'woocommerce_tax_rates',
 				array(
@@ -347,6 +349,7 @@ class ZipTax_Tax_Handler {
 			return (int) $existing;
 		}
 
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		$wpdb->insert(
 			$wpdb->prefix . 'woocommerce_tax_rates',
 			array(
@@ -412,12 +415,14 @@ class ZipTax_Tax_Handler {
 				   AND oim.meta_key = 'rate_id'";
 		}
 
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$deleted = $wpdb->query( $wpdb->prepare(
 			"DELETE tr FROM {$wpdb->prefix}woocommerce_tax_rates tr
 			 WHERE tr.tax_rate_name = %s
 			   AND tr.tax_rate_id NOT IN ( {$referenced_subquery} )",
 			self::RATE_NAME
 		) );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		if ( $deleted > 0 ) {
 			ZipTax_WooCommerce::log( sprintf( 'Cleaned up %d orphaned tax rate rows.', $deleted ), 'info' );
@@ -559,7 +564,7 @@ class ZipTax_Tax_Handler {
 		return array(
 			$this->current_rate_id => array(
 				'rate'     => $rate_pct,
-				'label'    => __( 'Sales Tax', 'ziptax-woocommerce' ),
+				'label'    => __( 'Sales Tax', 'ziptax-sales-tax' ),
 				'shipping' => $this->tax_shipping ? 'yes' : 'no',
 				'compound' => 'no',
 			),

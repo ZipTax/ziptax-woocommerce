@@ -24,7 +24,7 @@ Install the plugin, enter your API key, and tax rates are determined automatical
 
 ## Installation
 
-1. Upload the `ziptax-woocommerce` folder to `wp-content/plugins/`, or install directly from the WordPress plugin directory.
+1. Upload the `ziptax-sales-tax` folder to `wp-content/plugins/`, or install directly from the WordPress plugin directory.
 2. Activate the plugin through the **Plugins** menu.
 3. Go to **WooCommerce > Settings > Integration > Zip Tax** and enter your API key.
 4. That's it — tax rates are now calculated automatically at checkout.
@@ -64,6 +64,12 @@ TIC codes allow you to specify the type of product being sold so that product-sp
 Yes. The plugin declares full compatibility with WooCommerce High-Performance Order Storage.
 
 ## Changelog
+
+### 3.1.1
+
+- Fix: Added missing translators comment for WordPress i18n compliance.
+- Fix: Corrected PHPCS annotations for nonce verification and direct database queries.
+- Fix: Reduced readme tags to comply with WordPress Plugin Directory limit.
 
 ### 3.0.1
 

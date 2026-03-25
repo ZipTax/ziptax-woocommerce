@@ -6,7 +6,7 @@
  * address-based geocoded lookups, postal-code fallbacks,
  * US and Canada support, and TIC product taxability codes.
  *
- * @package ZipTax_WooCommerce
+ * @package ZipTax_Sales_Tax
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -61,7 +61,7 @@ class ZipTax_API {
 
 		// If we don't have at least a city or postal code, bail.
 		if ( empty( $address['city'] ) && empty( $address['postcode'] ) ) {
-			return new WP_Error( 'ziptax_incomplete_address', __( 'Address is incomplete for tax lookup.', 'ziptax-woocommerce' ) );
+			return new WP_Error( 'ziptax_incomplete_address', __( 'Address is incomplete for tax lookup.', 'ziptax-sales-tax' ) );
 		}
 
 		$params = array(
@@ -163,7 +163,7 @@ class ZipTax_API {
 
 		if ( json_last_error() !== JSON_ERROR_NONE ) {
 			ZipTax_WooCommerce::log( 'API response parse error: ' . json_last_error_msg(), 'error' );
-			return new WP_Error( 'ziptax_json_error', __( 'Invalid response from Zip Tax API.', 'ziptax-woocommerce' ) );
+			return new WP_Error( 'ziptax_json_error', __( 'Invalid response from Zip Tax API.', 'ziptax-sales-tax' ) );
 		}
 
 		// Check for API-level errors.
@@ -195,7 +195,8 @@ class ZipTax_API {
 			ZipTax_WooCommerce::log( sprintf( 'API HTTP error %d', $http_code ), 'error' );
 			return new WP_Error(
 				'ziptax_http_error',
-				sprintf( __( 'Zip Tax API returned HTTP %d.', 'ziptax-woocommerce' ), $http_code ),
+				/* translators: %d: HTTP status code returned by the API. */
+				sprintf( __( 'Zip Tax API returned HTTP %d.', 'ziptax-sales-tax' ), $http_code ),
 				array( 'http_status' => $http_code )
 			);
 		}

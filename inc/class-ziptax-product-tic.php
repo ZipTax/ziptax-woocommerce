@@ -6,7 +6,7 @@
  * so merchants can assign a TIC code per product. The code is sent to the
  * v60 API as the `taxabilityCode` parameter for product-specific tax rules.
  *
- * @package ZipTax_WooCommerce
+ * @package ZipTax_Sales_Tax
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -60,10 +60,10 @@ class ZipTax_Product_TIC {
 	public function add_tic_field() {
 		woocommerce_wp_text_input( array(
 			'id'          => self::META_KEY,
-			'label'       => __( 'Taxability Code (TIC)', 'ziptax-woocommerce' ),
-			'placeholder' => __( 'e.g. 20010', 'ziptax-woocommerce' ),
+			'label'       => __( 'Taxability Code (TIC)', 'ziptax-sales-tax' ),
+			'placeholder' => __( 'e.g. 20010', 'ziptax-sales-tax' ),
 			'desc_tip'    => true,
-			'description' => __( 'Optional Taxability Information Code for product-specific tax rules. Leave blank to use the standard sales tax rate. See zip.tax for available TIC codes.', 'ziptax-woocommerce' ),
+			'description' => __( 'Optional Taxability Information Code for product-specific tax rules. Leave blank to use the standard sales tax rate. See zip.tax for available TIC codes.', 'ziptax-sales-tax' ),
 			'type'        => 'number',
 			'custom_attributes' => array(
 				'min'  => '0',
@@ -78,11 +78,13 @@ class ZipTax_Product_TIC {
 	 * @param int $post_id Product (post) ID.
 	 */
 	public function save_tic_field( $post_id ) {
-		// phpcs:ignore WordPress.Security.NonceVerification
+		// Nonce is verified by WooCommerce in WC_Meta_Box_Product_Data::save().
+		// phpcs:disable WordPress.Security.NonceVerification.Missing
 		if ( isset( $_POST[ self::META_KEY ] ) ) {
 			$tic = absint( $_POST[ self::META_KEY ] );
 			update_post_meta( $post_id, self::META_KEY, $tic > 0 ? $tic : '' );
 		}
+		// phpcs:enable WordPress.Security.NonceVerification.Missing
 	}
 
 	/**
@@ -98,10 +100,10 @@ class ZipTax_Product_TIC {
 		woocommerce_wp_text_input( array(
 			'id'            => self::META_KEY . '_' . $loop,
 			'name'          => self::META_KEY . '[' . $loop . ']',
-			'label'         => __( 'Taxability Code (TIC)', 'ziptax-woocommerce' ),
-			'placeholder'   => __( 'e.g. 20010', 'ziptax-woocommerce' ),
+			'label'         => __( 'Taxability Code (TIC)', 'ziptax-sales-tax' ),
+			'placeholder'   => __( 'e.g. 20010', 'ziptax-sales-tax' ),
 			'desc_tip'      => true,
-			'description'   => __( 'Optional TIC code for this variation. Leave blank to inherit from parent.', 'ziptax-woocommerce' ),
+			'description'   => __( 'Optional TIC code for this variation. Leave blank to inherit from parent.', 'ziptax-sales-tax' ),
 			'value'         => $value,
 			'type'          => 'number',
 			'wrapper_class' => 'form-row form-row-first',
@@ -119,10 +121,12 @@ class ZipTax_Product_TIC {
 	 * @param int $loop         Variation loop index.
 	 */
 	public function save_variation_tic_field( $variation_id, $loop ) {
-		// phpcs:ignore WordPress.Security.NonceVerification
+		// Nonce is verified by WooCommerce in WC_Meta_Box_Product_Data::save().
+		// phpcs:disable WordPress.Security.NonceVerification.Missing
 		if ( isset( $_POST[ self::META_KEY ][ $loop ] ) ) {
 			$tic = absint( $_POST[ self::META_KEY ][ $loop ] );
 			update_post_meta( $variation_id, self::META_KEY, $tic > 0 ? $tic : '' );
 		}
+		// phpcs:enable WordPress.Security.NonceVerification.Missing
 	}
 }

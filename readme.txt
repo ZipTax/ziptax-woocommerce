@@ -1,14 +1,16 @@
 === ZipTax Sales Tax ===
 Contributors: ziptax
-Tags: ziptax, taxes, tax calculation, automated tax, sales tax, sales tax rates, canada tax, gst, pst, hst
+Tags: tax, sales tax, tax calculation, woocommerce tax, ziptax
 Requires at least: 6.0
 Tested up to: 6.9
-Stable tag: 3.1.0
+Stable tag: 3.1.1
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
+
+Automated, real-time sales tax calculation for WooCommerce powered by the Zip Tax API.
 
 == Description ==
 
@@ -28,7 +30,7 @@ Powered by the **Zip Tax API v60**, the plugin uses address-level geocoding to d
 
 == Installation ==
 
-1. Upload the `ziptax-woocommerce` folder to `wp-content/plugins/`, or install directly from the WordPress plugin directory.
+1. Upload the `ziptax-sales-tax` folder to `wp-content/plugins/`, or install directly from the WordPress plugin directory.
 2. Activate the plugin through the **Plugins** menu.
 3. Go to **WooCommerce > Settings > Integration > Zip Tax** and enter your API key.
 4. That's it — tax rates are now calculated automatically at checkout.
@@ -60,6 +62,11 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 == Screenshots ==
 
 == Changelog ==
+
+= 3.1.1 =
+* Fix: Added missing translators comment for WordPress i18n compliance.
+* Fix: Corrected PHPCS annotations for nonce verification and direct database queries.
+* Fix: Reduced readme tags to comply with WordPress Plugin Directory limit.
 
 = 3.0.1 =
 * Fix: TIC-exempt products (0% rate) now correctly exempt instead of taxed at the general rate.

@@ -5,7 +5,7 @@
  * Provides the admin settings UI under WooCommerce > Settings > Integration > ZipTax.
  * Handles API key configuration, tax display options, and debug logging toggle.
  *
- * @package ZipTax_WooCommerce
+ * @package ZipTax_Sales_Tax
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -19,8 +19,8 @@ class ZipTax_WC_Integration extends WC_Integration {
 	 */
 	public function __construct() {
 		$this->id                 = 'ziptax';
-		$this->method_title       = __( 'Zip Tax', 'ziptax-woocommerce' );
-		$this->method_description = __( 'Automated sales tax calculation using the Zip Tax API v60 with address-level geocoding, product taxability codes (TIC), and US + Canada support.', 'ziptax-woocommerce' );
+		$this->method_title       = __( 'Zip Tax', 'ziptax-sales-tax' );
+		$this->method_description = __( 'Automated sales tax calculation using the Zip Tax API v60 with address-level geocoding, product taxability codes (TIC), and US + Canada support.', 'ziptax-sales-tax' );
 
 		// Load stored settings.
 		$this->init_form_fields();
@@ -46,47 +46,47 @@ class ZipTax_WC_Integration extends WC_Integration {
 	public function init_form_fields() {
 		$this->form_fields = array(
 			'api_key' => array(
-				'title'       => __( 'API Key', 'ziptax-woocommerce' ),
+				'title'       => __( 'API Key', 'ziptax-sales-tax' ),
 				'type'        => 'text',
 				'description' => sprintf(
 					/* translators: %s: URL to the Zip Tax registration page. */
-					__( 'Enter your Zip Tax API key. <a href="%s" target="_blank">Get your API key here</a>.', 'ziptax-woocommerce' ),
+					__( 'Enter your Zip Tax API key. <a href="%s" target="_blank">Get your API key here</a>.', 'ziptax-sales-tax' ),
 					'https://zip.tax'
 				),
 				'default'     => '',
 				'desc_tip'    => false,
 			),
 			'tax_based_on' => array(
-				'title'       => __( 'Calculate tax based on', 'ziptax-woocommerce' ),
+				'title'       => __( 'Calculate tax based on', 'ziptax-sales-tax' ),
 				'type'        => 'select',
-				'description' => __( 'Which customer address to use for the tax rate lookup.', 'ziptax-woocommerce' ),
+				'description' => __( 'Which customer address to use for the tax rate lookup.', 'ziptax-sales-tax' ),
 				'default'     => 'shipping',
 				'desc_tip'    => true,
 				'options'     => array(
-					'shipping' => __( 'Shipping address', 'ziptax-woocommerce' ),
-					'billing'  => __( 'Billing address', 'ziptax-woocommerce' ),
+					'shipping' => __( 'Shipping address', 'ziptax-sales-tax' ),
+					'billing'  => __( 'Billing address', 'ziptax-sales-tax' ),
 				),
 			),
 			'tax_shipping' => array(
-				'title'       => __( 'Tax shipping', 'ziptax-woocommerce' ),
+				'title'       => __( 'Tax shipping', 'ziptax-sales-tax' ),
 				'type'        => 'select',
-				'description' => __( 'How to determine if shipping charges are taxable.', 'ziptax-woocommerce' ),
+				'description' => __( 'How to determine if shipping charges are taxable.', 'ziptax-sales-tax' ),
 				'default'     => 'api',
 				'desc_tip'    => true,
 				'options'     => array(
-					'api'  => __( 'Use API response (recommended)', 'ziptax-woocommerce' ),
-					'yes'  => __( 'Always tax shipping', 'ziptax-woocommerce' ),
-					'no'   => __( 'Never tax shipping', 'ziptax-woocommerce' ),
+					'api'  => __( 'Use API response (recommended)', 'ziptax-sales-tax' ),
+					'yes'  => __( 'Always tax shipping', 'ziptax-sales-tax' ),
+					'no'   => __( 'Never tax shipping', 'ziptax-sales-tax' ),
 				),
 			),
 			'debug' => array(
-				'title'       => __( 'Debug logging', 'ziptax-woocommerce' ),
+				'title'       => __( 'Debug logging', 'ziptax-sales-tax' ),
 				'type'        => 'checkbox',
-				'label'       => __( 'Enable debug logging', 'ziptax-woocommerce' ),
+				'label'       => __( 'Enable debug logging', 'ziptax-sales-tax' ),
 				'default'     => 'no',
 				'description' => sprintf(
 					/* translators: %s: Path to WooCommerce log viewer. */
-					__( 'Log API requests and tax calculations. View logs in <a href="%s">WooCommerce > Status > Logs</a>.', 'ziptax-woocommerce' ),
+					__( 'Log API requests and tax calculations. View logs in <a href="%s">WooCommerce > Status > Logs</a>.', 'ziptax-sales-tax' ),
 					admin_url( 'admin.php?page=wc-status&tab=logs' )
 				),
 			),
@@ -141,8 +141,8 @@ class ZipTax_WC_Integration extends WC_Integration {
 		echo '<div class="notice notice-info inline"><p>';
 		printf(
 			/* translators: %s: URL to ZipTax integration settings. */
-			esc_html__( 'Tax rates are managed automatically by Zip Tax. %s', 'ziptax-woocommerce' ),
-			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Configure Zip Tax settings', 'ziptax-woocommerce' ) . '</a>'
+			esc_html__( 'Tax rates are managed automatically by Zip Tax. %s', 'ziptax-sales-tax' ),
+			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Configure Zip Tax settings', 'ziptax-sales-tax' ) . '</a>'
 		);
 		echo '</p></div>';
 	}
@@ -158,7 +158,7 @@ class ZipTax_WC_Integration extends WC_Integration {
 		$value = trim( sanitize_text_field( $value ) );
 
 		if ( empty( $value ) ) {
-			WC_Admin_Settings::add_error( __( 'Please enter your Zip Tax API key.', 'ziptax-woocommerce' ) );
+			WC_Admin_Settings::add_error( __( 'Please enter your Zip Tax API key.', 'ziptax-sales-tax' ) );
 		}
 
 		return $value;
