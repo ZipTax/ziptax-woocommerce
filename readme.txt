@@ -1,9 +1,9 @@
-=== Zip Tax - Sales Tax for WooCommerce ===
+=== ZipTax Sales Tax ===
 Contributors: ziptax
 Tags: ziptax, taxes, tax calculation, automated tax, sales tax, sales tax rates, canada tax, gst, pst, hst
 Requires at least: 6.0
-Tested up to: 6.7
-Stable tag: 3.0.2
+Tested up to: 6.9
+Stable tag: 3.1.0
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
