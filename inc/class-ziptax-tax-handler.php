@@ -375,29 +375,55 @@ class ZipTax_Tax_Handler {
 	/**
 	 * Remove ZipTax-managed tax rate rows not referenced by any order.
 	 *
-	 * Called daily via WP-Cron. Keeps the wc_tax_rates table clean while
-	 * preserving rows that orders still reference for reporting accuracy.
+	 * Called daily via WP-Cron and on plugin deactivation. Keeps the
+	 * wc_tax_rates table clean while preserving rows that orders still
+	 * reference for reporting accuracy.
+	 *
+	 * Supports both legacy post-based order storage and HPOS
+	 * (High-Performance Order Storage / Custom Order Tables).
 	 */
 	public function cleanup_orphaned_rates() {
+		self::delete_orphaned_rate_rows();
+	}
+
+	/**
+	 * Static helper to delete orphaned ZipTax rate rows.
+	 *
+	 * Can be called from both the cron callback and the deactivation hook.
+	 */
+	public static function delete_orphaned_rate_rows() {
 		global $wpdb;
+
+		// Build the subquery for rate IDs still referenced by orders.
+		// Branch based on whether HPOS (Custom Order Tables) is active.
+		if ( class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' )
+			&& \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled()
+		) {
+			// HPOS: use the wc_order_tax_lookup table which stores rate_id directly.
+			$referenced_subquery = "SELECT DISTINCT rate_id FROM {$wpdb->prefix}wc_order_tax_lookup";
+		} else {
+			// Legacy: rate_id is stored as meta_value in order item meta.
+			$referenced_subquery =
+				"SELECT DISTINCT CAST( oim.meta_value AS UNSIGNED )
+				 FROM {$wpdb->prefix}woocommerce_order_items oi
+				 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim
+				     ON oi.order_item_id = oim.order_item_id
+				 WHERE oi.order_item_type = 'tax'
+				   AND oim.meta_key = 'rate_id'";
+		}
 
 		$deleted = $wpdb->query( $wpdb->prepare(
 			"DELETE tr FROM {$wpdb->prefix}woocommerce_tax_rates tr
 			 WHERE tr.tax_rate_name = %s
-			   AND tr.tax_rate_id NOT IN (
-			       SELECT DISTINCT rate_id
-			       FROM {$wpdb->prefix}woocommerce_order_items oi
-			       INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim
-			           ON oi.order_item_id = oim.order_item_id
-			       WHERE oi.order_item_type = 'tax'
-			         AND oim.meta_key = 'rate_id'
-			   )",
+			   AND tr.tax_rate_id NOT IN ( {$referenced_subquery} )",
 			self::RATE_NAME
 		) );
 
 		if ( $deleted > 0 ) {
 			ZipTax_WooCommerce::log( sprintf( 'Cleaned up %d orphaned tax rate rows.', $deleted ), 'info' );
-			WC_Cache_Helper::invalidate_cache_group( 'taxes' );
+			if ( class_exists( 'WC_Cache_Helper' ) ) {
+				WC_Cache_Helper::invalidate_cache_group( 'taxes' );
+			}
 		}
 	}
 

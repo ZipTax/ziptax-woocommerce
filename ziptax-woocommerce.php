@@ -169,19 +169,7 @@ final class ZipTax_WooCommerce {
 		// Remove ZipTax-generated tax rate rows not referenced by any order.
 		// Rows still referenced by orders are kept for reporting accuracy.
 		if ( class_exists( 'ZipTax_Tax_Handler' ) ) {
-			$wpdb->query( $wpdb->prepare(
-				"DELETE tr FROM {$wpdb->prefix}woocommerce_tax_rates tr
-				 WHERE tr.tax_rate_name = %s
-				   AND tr.tax_rate_id NOT IN (
-				       SELECT DISTINCT rate_id
-				       FROM {$wpdb->prefix}woocommerce_order_items oi
-				       INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim
-				           ON oi.order_item_id = oim.order_item_id
-				       WHERE oi.order_item_type = 'tax'
-				         AND oim.meta_key = 'rate_id'
-				   )",
-				ZipTax_Tax_Handler::RATE_NAME
-			) );
+			ZipTax_Tax_Handler::delete_orphaned_rate_rows();
 
 			// Unschedule the cleanup cron.
 			$timestamp = wp_next_scheduled( ZipTax_Tax_Handler::CLEANUP_CRON_HOOK );
