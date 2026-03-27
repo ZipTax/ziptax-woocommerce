@@ -175,40 +175,15 @@ class ZipTax_Tax_Handler {
 	}
 
 	/**
-	 * Persist the current rate state to the WooCommerce session.
-	 *
-	 * Called after a successful lookup so subsequent cart recalculations
-	 * can restore the rate without hitting the API or rebuilding the DB row.
-	 *
-	 * @param string $address_hash The cache key / hash of the address used.
-	 */
-	private function persist_rate_state( $address_hash ) {
-		if ( ! WC()->session ) {
-			return;
-		}
-		WC()->session->set( 'ziptax_address_hash', $address_hash );
-		WC()->session->set( 'ziptax_rate_data',    $this->current_rate_data );
-		WC()->session->set( 'ziptax_rate_id',      $this->current_rate_id );
-		WC()->session->set( 'ziptax_tax_shipping', $this->tax_shipping );
-	}
-
-	/**
-	 * Clear the current rate from both the instance and the session.
+	 * Clear the current rate from the instance state.
 	 *
 	 * Called when the address is incomplete or unsupported so that no
-	 * stale tax is shown, and the next complete address triggers a fresh lookup.
+	 * stale tax is shown for the current request.
 	 */
 	private function clear_current_rate() {
 		$this->current_rate_data = null;
 		$this->current_rate_id   = null;
 		$this->tax_shipping      = false;
-
-		if ( WC()->session ) {
-			WC()->session->set( 'ziptax_address_hash', null );
-			WC()->session->set( 'ziptax_rate_data',    null );
-			WC()->session->set( 'ziptax_rate_id',      null );
-			WC()->session->set( 'ziptax_tax_shipping', null );
-		}
 	}
 
 	// ------------------------------------------------------------------
@@ -475,11 +450,10 @@ class ZipTax_Tax_Handler {
 	 * before WooCommerce runs its internal tax calculations.
 	 *
 	 * Tax is only calculated when the shipping address is fully populated
-	 * (address_1, city, state, postcode). Once a rate is established it
-	 * persists in the session and is reused on subsequent cart
-	 * recalculations (e.g. quantity changes, coupon codes) without
-	 * re-querying the API. The rate is refreshed only when the shipping
-	 * address actually changes.
+	 * (address_1, city, state, postcode). The three-tier cache inside
+	 * get_tax_rate() (memory → session → transient) prevents redundant API
+	 * calls when the address is unchanged; the rate is automatically
+	 * refreshed whenever the address changes.
 	 *
 	 * @param WC_Cart $cart
 	 */
@@ -504,7 +478,7 @@ class ZipTax_Tax_Handler {
 		$address = $this->get_customer_address( $customer );
 		$country = $address['country'] ?? '';
 
-		// Unsupported country — clear any previously stored rate.
+		// Unsupported country — clear any rate from the current request.
 		if ( ! $this->is_supported_country( $country ) ) {
 			$this->clear_current_rate();
 			return;
@@ -516,24 +490,7 @@ class ZipTax_Tax_Handler {
 			return;
 		}
 
-		// Build a hash of the current shipping address.
-		$address_hash = $this->build_cache_key( $address, 0 );
-
-		// If the shipping address hasn't changed since the last lookup,
-		// restore the persisted rate from the session and skip all DB/API work.
-		if ( WC()->session ) {
-			$stored_hash = WC()->session->get( 'ziptax_address_hash' );
-
-			if ( $stored_hash === $address_hash ) {
-				$this->current_rate_data = WC()->session->get( 'ziptax_rate_data' ) ?: null;
-				$this->current_rate_id   = WC()->session->get( 'ziptax_rate_id' )   ?: null;
-				$this->tax_shipping      = (bool) WC()->session->get( 'ziptax_tax_shipping' );
-				ZipTax_WooCommerce::log( 'Shipping address unchanged — using persisted rate.' );
-				return;
-			}
-		}
-
-		ZipTax_WooCommerce::log( '--- Shipping address changed, fetching new tax rate ---' );
+		ZipTax_WooCommerce::log( '--- Pre-fetching tax rate ---' );
 
 		$rate_data = $this->get_tax_rate( $address, 0 );
 		if ( ! $rate_data ) {
@@ -546,7 +503,6 @@ class ZipTax_Tax_Handler {
 
 		if ( $sales_rate <= 0 ) {
 			$this->current_rate_id = null;
-			$this->persist_rate_state( $address_hash );
 			return;
 		}
 
@@ -575,9 +531,6 @@ class ZipTax_Tax_Handler {
 			$this->current_rate_id,
 			$this->tax_shipping ? 'yes' : 'no'
 		) );
-
-		// Persist the new rate so it survives subsequent recalculations.
-		$this->persist_rate_state( $address_hash );
 	}
 
 	// ------------------------------------------------------------------
