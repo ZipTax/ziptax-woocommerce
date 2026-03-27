@@ -56,17 +56,6 @@ class ZipTax_WC_Integration extends WC_Integration {
 				'default'     => '',
 				'desc_tip'    => false,
 			),
-			'tax_based_on' => array(
-				'title'       => __( 'Calculate tax based on', 'ziptax-sales-tax' ),
-				'type'        => 'select',
-				'description' => __( 'Which customer address to use for the tax rate lookup.', 'ziptax-sales-tax' ),
-				'default'     => 'shipping',
-				'desc_tip'    => true,
-				'options'     => array(
-					'shipping' => __( 'Shipping address', 'ziptax-sales-tax' ),
-					'billing'  => __( 'Billing address', 'ziptax-sales-tax' ),
-				),
-			),
 			'tax_shipping' => array(
 				'title'       => __( 'Tax shipping', 'ziptax-sales-tax' ),
 				'type'        => 'select',
@@ -109,9 +98,8 @@ class ZipTax_WC_Integration extends WC_Integration {
 		// Enable tax calculations.
 		update_option( 'woocommerce_calc_taxes', 'yes' );
 
-		// Set tax calculation basis.
-		$tax_based_on = $this->get_option( 'tax_based_on', 'shipping' );
-		update_option( 'woocommerce_tax_based_on', $tax_based_on );
+		// Tax is always calculated against the shipping address.
+		update_option( 'woocommerce_tax_based_on', 'shipping' );
 
 		// Prices entered exclusive of tax.
 		update_option( 'woocommerce_prices_include_tax', 'no' );

@@ -120,14 +120,6 @@ class ZipTax_Tax_Handler {
 	}
 
 	/**
-	 * @return string "shipping" or "billing".
-	 */
-	private function get_tax_address_type() {
-		$settings = $this->get_settings();
-		return $settings['tax_based_on'] ?? 'shipping';
-	}
-
-	/**
 	 * @return string "api", "yes", or "no".
 	 */
 	private function get_shipping_tax_preference() {
@@ -140,25 +132,14 @@ class ZipTax_Tax_Handler {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Build address array from the WooCommerce customer.
+	 * Build the shipping address array from the WooCommerce customer.
+	 *
+	 * Tax is always calculated against the shipping address.
 	 *
 	 * @param WC_Customer $customer
 	 * @return array
 	 */
 	private function get_customer_address( $customer ) {
-		$type = $this->get_tax_address_type();
-
-		if ( 'billing' === $type ) {
-			return array(
-				'address_1' => $customer->get_billing_address_1(),
-				'address_2' => $customer->get_billing_address_2(),
-				'city'      => $customer->get_billing_city(),
-				'state'     => $customer->get_billing_state(),
-				'postcode'  => $customer->get_billing_postcode(),
-				'country'   => $customer->get_billing_country(),
-			);
-		}
-
 		return array(
 			'address_1' => $customer->get_shipping_address_1(),
 			'address_2' => $customer->get_shipping_address_2(),
@@ -175,6 +156,59 @@ class ZipTax_Tax_Handler {
 	 */
 	private function is_supported_country( $country ) {
 		return in_array( strtoupper( $country ), array( 'US', 'CA' ), true );
+	}
+
+	/**
+	 * Check whether a shipping address has all required fields populated.
+	 *
+	 * Tax calculation is skipped until every field listed here is non-empty.
+	 * address_2 is intentionally excluded — it is optional.
+	 *
+	 * @param array $address
+	 * @return bool
+	 */
+	private function is_address_complete( array $address ) {
+		return ! empty( $address['address_1'] )
+			&& ! empty( $address['city'] )
+			&& ! empty( $address['state'] )
+			&& ! empty( $address['postcode'] );
+	}
+
+	/**
+	 * Persist the current rate state to the WooCommerce session.
+	 *
+	 * Called after a successful lookup so subsequent cart recalculations
+	 * can restore the rate without hitting the API or rebuilding the DB row.
+	 *
+	 * @param string $address_hash The cache key / hash of the address used.
+	 */
+	private function persist_rate_state( $address_hash ) {
+		if ( ! WC()->session ) {
+			return;
+		}
+		WC()->session->set( 'ziptax_address_hash', $address_hash );
+		WC()->session->set( 'ziptax_rate_data',    $this->current_rate_data );
+		WC()->session->set( 'ziptax_rate_id',      $this->current_rate_id );
+		WC()->session->set( 'ziptax_tax_shipping', $this->tax_shipping );
+	}
+
+	/**
+	 * Clear the current rate from both the instance and the session.
+	 *
+	 * Called when the address is incomplete or unsupported so that no
+	 * stale tax is shown, and the next complete address triggers a fresh lookup.
+	 */
+	private function clear_current_rate() {
+		$this->current_rate_data = null;
+		$this->current_rate_id   = null;
+		$this->tax_shipping      = false;
+
+		if ( WC()->session ) {
+			WC()->session->set( 'ziptax_address_hash', null );
+			WC()->session->set( 'ziptax_rate_data',    null );
+			WC()->session->set( 'ziptax_rate_id',      null );
+			WC()->session->set( 'ziptax_tax_shipping', null );
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -440,6 +474,13 @@ class ZipTax_Tax_Handler {
 	 * Pre-fetch the tax rate and ensure a matching WC tax rate row exists
 	 * before WooCommerce runs its internal tax calculations.
 	 *
+	 * Tax is only calculated when the shipping address is fully populated
+	 * (address_1, city, state, postcode). Once a rate is established it
+	 * persists in the session and is reused on subsequent cart
+	 * recalculations (e.g. quantity changes, coupon codes) without
+	 * re-querying the API. The rate is refreshed only when the shipping
+	 * address actually changes.
+	 *
 	 * @param WC_Cart $cart
 	 */
 	public function prefetch_rate( $cart ) {
@@ -463,24 +504,40 @@ class ZipTax_Tax_Handler {
 		$address = $this->get_customer_address( $customer );
 		$country = $address['country'] ?? '';
 
+		// Unsupported country — clear any previously stored rate.
 		if ( ! $this->is_supported_country( $country ) ) {
-			$this->current_rate_data = null;
-			$this->current_rate_id   = null;
+			$this->clear_current_rate();
 			return;
 		}
 
-		if ( empty( $address['address_1'] ) && empty( $address['city'] ) && empty( $address['postcode'] ) ) {
-			$this->current_rate_data = null;
-			$this->current_rate_id   = null;
+		// Wait until all required shipping fields are present.
+		if ( ! $this->is_address_complete( $address ) ) {
+			$this->clear_current_rate();
 			return;
 		}
 
-		ZipTax_WooCommerce::log( '--- Pre-fetching tax rate ---' );
+		// Build a hash of the current shipping address.
+		$address_hash = $this->build_cache_key( $address, 0 );
+
+		// If the shipping address hasn't changed since the last lookup,
+		// restore the persisted rate from the session and skip all DB/API work.
+		if ( WC()->session ) {
+			$stored_hash = WC()->session->get( 'ziptax_address_hash' );
+
+			if ( $stored_hash === $address_hash ) {
+				$this->current_rate_data = WC()->session->get( 'ziptax_rate_data' ) ?: null;
+				$this->current_rate_id   = WC()->session->get( 'ziptax_rate_id' )   ?: null;
+				$this->tax_shipping      = (bool) WC()->session->get( 'ziptax_tax_shipping' );
+				ZipTax_WooCommerce::log( 'Shipping address unchanged — using persisted rate.' );
+				return;
+			}
+		}
+
+		ZipTax_WooCommerce::log( '--- Shipping address changed, fetching new tax rate ---' );
 
 		$rate_data = $this->get_tax_rate( $address, 0 );
 		if ( ! $rate_data ) {
-			$this->current_rate_data = null;
-			$this->current_rate_id   = null;
+			$this->clear_current_rate();
 			return;
 		}
 
@@ -489,11 +546,12 @@ class ZipTax_Tax_Handler {
 
 		if ( $sales_rate <= 0 ) {
 			$this->current_rate_id = null;
+			$this->persist_rate_state( $address_hash );
 			return;
 		}
 
 		// Determine shipping taxability.
-		$shipping_pref    = $this->get_shipping_tax_preference();
+		$shipping_pref      = $this->get_shipping_tax_preference();
 		$this->tax_shipping = false;
 
 		if ( 'yes' === $shipping_pref ) {
@@ -506,7 +564,7 @@ class ZipTax_Tax_Handler {
 		$this->current_rate_id = $this->get_or_create_tax_rate_id(
 			$sales_rate,
 			$rate_data['state'] ?? $address['state'],
-			$rate_data['city'] ?? $address['city'],
+			$rate_data['city']  ?? $address['city'],
 			$address['country'],
 			$this->tax_shipping
 		);
@@ -517,6 +575,9 @@ class ZipTax_Tax_Handler {
 			$this->current_rate_id,
 			$this->tax_shipping ? 'yes' : 'no'
 		) );
+
+		// Persist the new rate so it survives subsequent recalculations.
+		$this->persist_rate_state( $address_hash );
 	}
 
 	// ------------------------------------------------------------------
