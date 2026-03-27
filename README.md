@@ -33,7 +33,7 @@ To obtain an API key, visit [https://zip.tax](https://zip.tax).
 
 ## How It Works
 
-The plugin sends your customer's full shipping (or billing) address to the Zip Tax API at checkout. The API geocodes the address and returns the exact combined sales tax rate for that location, broken down by jurisdiction (state, county, city, district). The rate is applied to the cart total and displayed as a single "Sales Tax" line item.
+The plugin sends your customer's full shipping address to the Zip Tax API at checkout. The API geocodes the address and returns the exact combined sales tax rate for that location, broken down by jurisdiction (state, county, city, district). The rate is applied to the cart total and displayed as a single "Sales Tax" line item.
 
 If a product has a Taxability Information Code (TIC) assigned, the API applies product-specific tax rules for that jurisdiction — for example, reduced rates or exemptions on clothing, food, or digital goods.
 
@@ -53,7 +53,7 @@ Version 3.0 uses the Zip Tax API v60, which provides address-level geocoded tax 
 
 ### Does this plugin support Canadian taxes?
 
-Yes. When a customer's shipping or billing address is in Canada, the plugin automatically requests Canadian tax rates (GST, PST, HST) from the API. Your API key must have Canadian rate access enabled.
+Yes. When a customer's shipping address is in Canada, the plugin automatically requests Canadian tax rates (GST, PST, HST) from the API. Your API key must have Canadian rate access enabled.
 
 ### What are Taxability Information Codes (TIC)?
 
@@ -64,6 +64,17 @@ TIC codes allow you to specify the type of product being sold so that product-sp
 Yes. The plugin declares full compatibility with WooCommerce High-Performance Order Storage.
 
 ## Changelog
+
+### 3.2.1
+
+- Fix: Tax now recalculates correctly when the shipping address is edited or the "Ship to a different address" checkbox is toggled during checkout.
+
+### 3.2.0
+
+- Improvement: API lookups always use the full `address` parameter — postal code, city, and state are never sent as separate parameters, ensuring address-level geocoding is used in every case.
+- Improvement: Address string is now comma-formatted (`200 Spectrum Center Drive, Irvine, CA 92618`) for consistent geocoding.
+- Improvement: Tax is always calculated against the shipping address. The "Calculate tax based on" setting (billing vs. shipping) has been removed.
+- Improvement: Tax is only calculated once the complete shipping address is entered (street, city, state, and postcode are all required). Partial addresses no longer trigger API calls.
 
 ### 3.1.1
 
