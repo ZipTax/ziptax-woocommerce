@@ -3,8 +3,8 @@
  * ZipTax API v60 client.
  *
  * Handles all communication with the Zip Tax API including
- * address-based geocoded lookups, postal-code fallbacks,
- * US and Canada support, and TIC product taxability codes.
+ * address-based geocoded lookups, US and Canada support,
+ * and TIC product taxability codes.
  *
  * @package ZipTax_Sales_Tax
  */
@@ -32,8 +32,10 @@ class ZipTax_API {
 	/**
 	 * Look up tax rates by full address (geocoded).
 	 *
-	 * Builds an address string from components and sends to v60.
-	 * Falls back to postal code lookup if address is insufficient.
+	 * Builds a single address string from all available components and sends it
+	 * to the v60 API using only the `address` parameter. No individual postal
+	 * code, city, or state parameters are sent — the API geocodes the full
+	 * string to determine the exact tax jurisdiction.
 	 *
 	 * @param array $address {
 	 *     Address components.
@@ -49,41 +51,37 @@ class ZipTax_API {
 	 * @return array|WP_Error Parsed API response or error.
 	 */
 	public function lookup_by_address( array $address, $taxability_code = 0 ) {
-		$parts = array_filter( array(
-			$address['address_1'] ?? '',
-			$address['address_2'] ?? '',
-			$address['city']      ?? '',
-			$address['state']     ?? '',
-			$address['postcode']  ?? '',
-		) );
+		// Build a comma-separated address string, e.g.
+		// "200 Spectrum Center Drive, Suite 100, Irvine, CA 92618"
+		$components = array();
 
-		$address_string = implode( ' ', $parts );
+		if ( ! empty( trim( $address['address_1'] ?? '' ) ) ) {
+			$components[] = trim( $address['address_1'] );
+		}
+		if ( ! empty( trim( $address['address_2'] ?? '' ) ) ) {
+			$components[] = trim( $address['address_2'] );
+		}
+		if ( ! empty( trim( $address['city'] ?? '' ) ) ) {
+			$components[] = trim( $address['city'] );
+		}
+		// State and postcode share the same segment (no comma between them).
+		$state_zip = trim( ( $address['state'] ?? '' ) . ' ' . ( $address['postcode'] ?? '' ) );
+		if ( $state_zip ) {
+			$components[] = $state_zip;
+		}
 
-		// If we don't have at least a city or postal code, bail.
-		if ( empty( $address['city'] ) && empty( $address['postcode'] ) ) {
+		$address_string = implode( ', ', $components );
+
+		if ( empty( $address_string ) ) {
 			return new WP_Error( 'ziptax_incomplete_address', __( 'Address is incomplete for tax lookup.', 'ziptax-sales-tax' ) );
 		}
 
+		// Only send `address` — no postalcode, city, or state parameters.
 		$params = array(
-			'key'    => $this->api_key,
-			'format' => 'json',
+			'key'     => $this->api_key,
+			'format'  => 'json',
+			'address' => $address_string,
 		);
-
-		// Use full address string if we have a street address for best accuracy.
-		if ( ! empty( $address['address_1'] ) ) {
-			$params['address'] = $address_string;
-		} else {
-			// Fall back to individual components.
-			if ( ! empty( $address['postcode'] ) ) {
-				$params['postalcode'] = $address['postcode'];
-			}
-			if ( ! empty( $address['city'] ) ) {
-				$params['city'] = $address['city'];
-			}
-			if ( ! empty( $address['state'] ) ) {
-				$params['state'] = $address['state'];
-			}
-		}
 
 		// Country support.
 		$country = strtoupper( $address['country'] ?? 'US' );

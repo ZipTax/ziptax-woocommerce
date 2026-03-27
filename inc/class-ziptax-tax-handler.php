@@ -469,7 +469,7 @@ class ZipTax_Tax_Handler {
 			return;
 		}
 
-		if ( empty( $address['postcode'] ) && empty( $address['city'] ) ) {
+		if ( empty( $address['address_1'] ) && empty( $address['city'] ) && empty( $address['postcode'] ) ) {
 			$this->current_rate_data = null;
 			$this->current_rate_id   = null;
 			return;

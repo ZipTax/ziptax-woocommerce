@@ -3,7 +3,7 @@ Contributors: ziptax
 Tags: tax, sales tax, tax calculation, woocommerce tax, ziptax
 Requires at least: 6.0
 Tested up to: 6.9
-Stable tag: 3.1.1
+Stable tag: 3.1.2
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
