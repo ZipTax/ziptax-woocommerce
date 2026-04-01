@@ -327,20 +327,41 @@ class ZipTax_Tax_Handler {
 		$ship_flag  = $shipping ? 1 : 0;
 
 		// Look for an existing row matching this jurisdiction.
+		// City is stored in the separate woocommerce_tax_rate_locations table,
+		// so we join on it (or check for rows with no city location when empty).
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$existing = $wpdb->get_var( $wpdb->prepare(
-			"SELECT tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates
-			 WHERE tax_rate_name = %s
-			   AND tax_rate_country = %s
-			   AND tax_rate_state = %s
-			   AND tax_rate_city = %s
-			   AND tax_rate_class = ''
-			 LIMIT 1",
-			self::RATE_NAME,
-			$country,
-			$state,
-			$city_upper
-		) );
+		if ( '' !== $city_upper ) {
+			$existing = $wpdb->get_var( $wpdb->prepare(
+				"SELECT tr.tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates tr
+				 INNER JOIN {$wpdb->prefix}woocommerce_tax_rate_locations loc
+				     ON tr.tax_rate_id = loc.tax_rate_id AND loc.location_type = 'city'
+				 WHERE tr.tax_rate_name = %s
+				   AND tr.tax_rate_country = %s
+				   AND tr.tax_rate_state = %s
+				   AND loc.location_code = %s
+				   AND tr.tax_rate_class = ''
+				 LIMIT 1",
+				self::RATE_NAME,
+				$country,
+				$state,
+				$city_upper
+			) );
+		} else {
+			$existing = $wpdb->get_var( $wpdb->prepare(
+				"SELECT tr.tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates tr
+				 LEFT JOIN {$wpdb->prefix}woocommerce_tax_rate_locations loc
+				     ON tr.tax_rate_id = loc.tax_rate_id AND loc.location_type = 'city'
+				 WHERE tr.tax_rate_name = %s
+				   AND tr.tax_rate_country = %s
+				   AND tr.tax_rate_state = %s
+				   AND loc.location_code IS NULL
+				   AND tr.tax_rate_class = ''
+				 LIMIT 1",
+				self::RATE_NAME,
+				$country,
+				$state
+			) );
+		}
 
 		if ( $existing ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -358,30 +379,29 @@ class ZipTax_Tax_Handler {
 			return (int) $existing;
 		}
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		$wpdb->insert(
-			$wpdb->prefix . 'woocommerce_tax_rates',
-			array(
-				'tax_rate_country'  => $country,
-				'tax_rate_state'    => $state,
-				'tax_rate_city'     => $city_upper,
-				'tax_rate_name'     => self::RATE_NAME,
-				'tax_rate'          => $rate_pct,
-				'tax_rate_priority' => 1,
-				'tax_rate_compound' => 0,
-				'tax_rate_shipping' => $ship_flag,
-				'tax_rate_order'    => 0,
-				'tax_rate_class'    => '',
-			),
-			array( '%s', '%s', '%s', '%s', '%f', '%d', '%d', '%d', '%d', '%s' )
-		);
+		// Insert the rate row using WooCommerce's own helper.
+		$rate_id = WC_Tax::_insert_tax_rate( array(
+			'tax_rate_country'  => $country,
+			'tax_rate_state'    => $state,
+			'tax_rate_name'     => self::RATE_NAME,
+			'tax_rate'          => $rate_pct,
+			'tax_rate_priority' => 1,
+			'tax_rate_compound' => 0,
+			'tax_rate_shipping' => $ship_flag,
+			'tax_rate_order'    => 0,
+			'tax_rate_class'    => '',
+		) );
 
-		$rate_id = (int) $wpdb->insert_id;
+		// Store the city in the locations table.
+		if ( '' !== $city_upper ) {
+			WC_Tax::_update_tax_rate_cities( $rate_id, $city_upper );
+		}
+
 		ZipTax_WooCommerce::log( sprintf( 'Created tax rate ID %d at %.4f%%', $rate_id, $rate_pct ) );
 
 		WC_Cache_Helper::invalidate_cache_group( 'taxes' );
 
-		return $rate_id;
+		return (int) $rate_id;
 	}
 
 	/**
@@ -425,6 +445,17 @@ class ZipTax_Tax_Handler {
 		}
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		// Remove orphaned location rows first (city/postcode entries in the locations table).
+		$wpdb->query( $wpdb->prepare(
+			"DELETE loc FROM {$wpdb->prefix}woocommerce_tax_rate_locations loc
+			 INNER JOIN {$wpdb->prefix}woocommerce_tax_rates tr
+			     ON loc.tax_rate_id = tr.tax_rate_id
+			 WHERE tr.tax_rate_name = %s
+			   AND tr.tax_rate_id NOT IN ( {$referenced_subquery} )",
+			self::RATE_NAME
+		) );
+
 		$deleted = $wpdb->query( $wpdb->prepare(
 			"DELETE tr FROM {$wpdb->prefix}woocommerce_tax_rates tr
 			 WHERE tr.tax_rate_name = %s
