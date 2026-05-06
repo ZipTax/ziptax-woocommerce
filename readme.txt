@@ -3,7 +3,7 @@ Contributors: ziptax
 Tags: tax, sales tax, tax calculation, woocommerce tax, ziptax
 Requires at least: 6.0
 Tested up to: 6.9
-Stable tag: 3.2.2
+Stable tag: 3.3.0
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
@@ -63,6 +63,12 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 == Changelog ==
 
+= 3.3.0 =
+* Fix: Merchant-configured tax rates now take precedence over Zip Tax. Standard Rates, Reduced Rate Rates, Zero Rate Rates, and any other rates configured under WooCommerce > Settings > Tax are no longer overwritten by the API rate.
+* Change: The plugin no longer modifies WooCommerce tax options (Enable taxes, Calculate tax based on, Display, Rounding, etc.). Merchants fully own those settings.
+* Change: A `wc_tax_rates` row for the Zip Tax rate is only created when no merchant rate covers the customer's location, instead of on every calculation.
+* Change: TIC product adjustments are no longer applied to items in non-standard tax classes (Zero Rate, Reduced Rate, custom classes), or to items whose tax was calculated against a merchant-defined rate.
+
 = 3.2.1 =
 * Fix: Tax now recalculates correctly when the shipping address is edited or the "Ship to a different address" checkbox is toggled during checkout.
 
@@ -102,6 +108,9 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 * Initial release.
 
 == Upgrade Notice ==
+
+= 3.3.0 =
+Merchant-configured WooCommerce tax rates (Standard, Reduced, Zero, etc.) now take precedence over Zip Tax. The plugin no longer modifies WooCommerce tax options or overwrites manually configured rate tables.
 
 = 3.2.1 =
 Bug fix: tax now recalculates correctly when the shipping address is changed during checkout.
