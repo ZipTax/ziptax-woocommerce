@@ -33,9 +33,6 @@ class ZipTax_WC_Integration extends WC_Integration {
 		// Save settings action.
 		add_action( 'woocommerce_update_options_integration_' . $this->id, array( $this, 'process_admin_options' ) );
 
-		// On first save, configure WooCommerce tax settings.
-		add_action( 'woocommerce_update_options_integration_' . $this->id, array( $this, 'maybe_configure_woocommerce_tax_settings' ) );
-
 		// Display notice on the WooCommerce Tax settings tab.
 		add_action( 'woocommerce_sections_tax', array( $this, 'tax_section_notice' ), 9 );
 	}
@@ -83,53 +80,20 @@ class ZipTax_WC_Integration extends WC_Integration {
 	}
 
 	/**
-	 * Configure WooCommerce core tax settings on first save only.
-	 *
-	 * Sets recommended WooCommerce tax options (enable taxes, display
-	 * settings, rounding, etc.) the first time the integration settings
-	 * are saved. Subsequent saves skip this so admins can customize
-	 * WooCommerce tax display options without them being overwritten.
-	 */
-	public function maybe_configure_woocommerce_tax_settings() {
-		if ( 'yes' === get_option( 'ziptax_wc_tax_configured' ) ) {
-			return;
-		}
-
-		// Enable tax calculations.
-		update_option( 'woocommerce_calc_taxes', 'yes' );
-
-		// Tax is always calculated against the shipping address.
-		update_option( 'woocommerce_tax_based_on', 'shipping' );
-
-		// Prices entered exclusive of tax.
-		update_option( 'woocommerce_prices_include_tax', 'no' );
-
-		// Don't pre-fill customer address (let checkout gather it).
-		update_option( 'woocommerce_default_customer_address', '' );
-
-		// Display taxes exclusive of price.
-		update_option( 'woocommerce_tax_display_shop', 'excl' );
-		update_option( 'woocommerce_tax_display_cart', 'excl' );
-
-		// Show a single tax total line.
-		update_option( 'woocommerce_tax_total_display', 'single' );
-
-		// Don't round tax at subtotal level — apply per-line for accuracy.
-		update_option( 'woocommerce_tax_round_at_subtotal', 'no' );
-
-		// Mark as configured so we don't override on future saves.
-		update_option( 'ziptax_wc_tax_configured', 'yes' );
-	}
-
-	/**
 	 * Display a notice on the WooCommerce Tax settings tab.
+	 *
+	 * Zip Tax does not modify any WooCommerce tax options or rate tables.
+	 * Rates configured here (Tax options, Standard rates, Reduced rate
+	 * rates, Zero rate rates, etc.) take precedence over Zip Tax for any
+	 * location/tax class they cover. Zip Tax fills in only when no
+	 * matching user-defined rate exists.
 	 */
 	public function tax_section_notice() {
 		$settings_url = admin_url( 'admin.php?page=wc-settings&tab=integration&section=ziptax' );
 		echo '<div class="notice notice-info inline"><p>';
 		printf(
 			/* translators: %s: URL to ZipTax integration settings. */
-			esc_html__( 'Tax rates are managed automatically by Zip Tax. %s', 'ziptax-sales-tax' ),
+			esc_html__( 'Rates configured on this page take precedence over Zip Tax. Zip Tax provides automated rates only for locations and tax classes you have not configured here. %s', 'ziptax-sales-tax' ),
 			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Configure Zip Tax settings', 'ziptax-sales-tax' ) . '</a>'
 		);
 		echo '</p></div>';

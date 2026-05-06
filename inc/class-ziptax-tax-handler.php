@@ -38,7 +38,21 @@ class ZipTax_Tax_Handler {
 	private $rate_memory_cache = array();
 
 	/**
+	 * Per-request cache of rate IDs known to be ZipTax-managed.
+	 *
+	 * Avoids re-querying the DB during the many woocommerce_find_rates
+	 * calls that occur in a single page load.
+	 *
+	 * @var array<int,bool>
+	 */
+	private $ziptax_owned_rate_ids = array();
+
+	/**
 	 * The WooCommerce tax rate ID for the current rate.
+	 *
+	 * Created lazily the first time we actually inject the API rate so
+	 * we don't write to the wc_tax_rates table when user-defined rates
+	 * already cover the customer's location.
 	 *
 	 * @var int|null
 	 */
@@ -477,14 +491,17 @@ class ZipTax_Tax_Handler {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Pre-fetch the tax rate and ensure a matching WC tax rate row exists
-	 * before WooCommerce runs its internal tax calculations.
+	 * Pre-fetch the API tax rate before WooCommerce calculates totals.
 	 *
 	 * Tax is only calculated when the shipping address is fully populated
 	 * (address_1, city, state, postcode). The three-tier cache inside
 	 * get_tax_rate() (memory → session → transient) prevents redundant API
 	 * calls when the address is unchanged; the rate is automatically
 	 * refreshed whenever the address changes.
+	 *
+	 * No wc_tax_rates row is written here — it's created lazily inside
+	 * inject_tax_rate() only when no user-defined rate covers the
+	 * location, so we never insert rows the merchant didn't ask for.
 	 *
 	 * @param WC_Cart $cart
 	 */
@@ -530,12 +547,9 @@ class ZipTax_Tax_Handler {
 		}
 
 		$this->current_rate_data = $rate_data;
-		$sales_rate = (float) $rate_data['sales_tax_rate'];
+		$this->current_rate_id   = null;
 
-		if ( $sales_rate <= 0 ) {
-			$this->current_rate_id = null;
-			return;
-		}
+		$sales_rate = (float) $rate_data['sales_tax_rate'];
 
 		// Determine shipping taxability.
 		$shipping_pref      = $this->get_shipping_tax_preference();
@@ -547,21 +561,112 @@ class ZipTax_Tax_Handler {
 			$this->tax_shipping = ! empty( $rate_data['freight_taxable'] );
 		}
 
-		// Ensure a matching tax rate row exists in the DB.
+		ZipTax_WooCommerce::log( sprintf(
+			'Rate ready: %.4f%% (ship_tax=%s)',
+			$sales_rate * 100,
+			$this->tax_shipping ? 'yes' : 'no'
+		) );
+	}
+
+	/**
+	 * Lazily create or update the wc_tax_rates row for the API rate.
+	 *
+	 * Called from inject_tax_rate() only when we actually need to inject
+	 * — i.e. when no user-defined rate covers the location. Caches the
+	 * resulting rate ID for the rest of the request.
+	 *
+	 * @return int|null Tax rate ID, or null if we have no API rate to inject.
+	 */
+	private function ensure_current_rate_id() {
+		if ( null !== $this->current_rate_id ) {
+			return $this->current_rate_id;
+		}
+
+		if ( null === $this->current_rate_data ) {
+			return null;
+		}
+
+		$sales_rate = (float) $this->current_rate_data['sales_tax_rate'];
+		if ( $sales_rate <= 0 ) {
+			return null;
+		}
+
+		$customer = WC()->customer;
+		if ( ! $customer ) {
+			return null;
+		}
+
+		$address = $this->get_customer_address( $customer );
+
 		$this->current_rate_id = $this->get_or_create_tax_rate_id(
 			$sales_rate,
-			$rate_data['state'] ?? $address['state'],
-			$rate_data['city']  ?? $address['city'],
+			$this->current_rate_data['state'] ?? $address['state'],
+			$this->current_rate_data['city']  ?? $address['city'],
 			$address['country'],
 			$this->tax_shipping
 		);
 
+		$this->ziptax_owned_rate_ids[ $this->current_rate_id ] = true;
+
 		ZipTax_WooCommerce::log( sprintf(
-			'Rate ready: %.4f%% (ID %d, ship_tax=%s)',
-			$sales_rate * 100,
+			'Injected ZipTax rate ID %d at %.4f%%',
 			$this->current_rate_id,
-			$this->tax_shipping ? 'yes' : 'no'
+			$sales_rate * 100
 		) );
+
+		return $this->current_rate_id;
+	}
+
+	/**
+	 * Return only the rate IDs that were NOT created by this plugin.
+	 *
+	 * Used to detect when the merchant has manually configured tax rates
+	 * for the customer's location/tax class. Any non-ZipTax rate present
+	 * in WooCommerce's matched rates is treated as user-defined and wins.
+	 *
+	 * @param array $matched_tax_rates Rate map keyed by tax_rate_id.
+	 * @return array Subset of $matched_tax_rates that the merchant defined.
+	 */
+	private function filter_to_user_defined_rates( array $matched_tax_rates ) {
+		if ( empty( $matched_tax_rates ) ) {
+			return array();
+		}
+
+		$ids_to_check = array();
+		foreach ( array_keys( $matched_tax_rates ) as $rate_id ) {
+			$rate_id = (int) $rate_id;
+			if ( ! isset( $this->ziptax_owned_rate_ids[ $rate_id ] ) ) {
+				$ids_to_check[] = $rate_id;
+			}
+		}
+
+		if ( ! empty( $ids_to_check ) ) {
+			global $wpdb;
+			$placeholders = implode( ',', array_fill( 0, count( $ids_to_check ), '%d' ) );
+			$query_args   = $ids_to_check;
+			$query_args[] = self::RATE_NAME;
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$ziptax_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates
+				 WHERE tax_rate_id IN ($placeholders)
+				   AND tax_rate_name = %s",
+				$query_args
+			) );
+
+			foreach ( $ziptax_ids as $id ) {
+				$this->ziptax_owned_rate_ids[ (int) $id ] = true;
+			}
+		}
+
+		$user_rates = array();
+		foreach ( $matched_tax_rates as $rate_id => $rate ) {
+			if ( ! isset( $this->ziptax_owned_rate_ids[ (int) $rate_id ] ) ) {
+				$user_rates[ $rate_id ] = $rate;
+			}
+		}
+
+		return $user_rates;
 	}
 
 	// ------------------------------------------------------------------
@@ -571,17 +676,26 @@ class ZipTax_Tax_Handler {
 	/**
 	 * Inject the ZipTax rate into WooCommerce's native tax rate lookup.
 	 *
-	 * WC_Tax::find_rates() calls this filter with the location arguments.
-	 * If we have a pre-fetched rate for a supported country, we return it
-	 * so WooCommerce uses it for items, shipping, and fees.
+	 * Precedence rules:
+	 *   1. Non-standard tax classes (zero-rate, reduced-rate, custom
+	 *      classes) are returned untouched — WooCommerce's configured
+	 *      rates always apply.
+	 *   2. For the standard class, any rate the merchant configured for
+	 *      this location wins. Zip Tax only fills in when WooCommerce
+	 *      finds no user-defined rate.
+	 *   3. Unsupported countries are returned untouched.
 	 *
-	 * @param array $matched_tax_rates Existing matched rates.
+	 * The plugin never modifies WooCommerce tax options or overwrites
+	 * merchant-configured rate rows; it only adds a fallback rate for
+	 * locations the merchant has not configured.
+	 *
+	 * @param array $matched_tax_rates Existing matched rates from WC_Tax.
 	 * @param array $args              Location arguments (country, state, postcode, city, tax_class).
 	 * @return array
 	 */
 	public function inject_tax_rate( $matched_tax_rates, $args ) {
-		// Only inject if we have a pre-fetched rate.
-		if ( null === $this->current_rate_id || null === $this->current_rate_data ) {
+		// No prefetched data — nothing to inject; respect whatever WC found.
+		if ( null === $this->current_rate_data ) {
 			return $matched_tax_rates;
 		}
 
@@ -590,12 +704,19 @@ class ZipTax_Tax_Handler {
 			return $matched_tax_rates;
 		}
 
-		// Respect WooCommerce tax classes — only override the standard class.
-		// Products assigned "Zero Rate", "Reduced Rate", or other custom classes
-		// should keep their WooCommerce-configured rates unless a TIC code is used.
+		// Respect WooCommerce tax classes — only consider injecting on the standard class.
+		// "Zero Rate", "Reduced Rate", and other custom classes always use the
+		// merchant's WooCommerce-configured rates.
 		$tax_class = $args['tax_class'] ?? '';
 		if ( '' !== $tax_class && 'standard' !== $tax_class ) {
 			return $matched_tax_rates;
+		}
+
+		// Merchant-configured Standard Rates (or any non-ZipTax rate WC found
+		// for this location) take precedence over our API rate.
+		$user_rates = $this->filter_to_user_defined_rates( $matched_tax_rates );
+		if ( ! empty( $user_rates ) ) {
+			return $user_rates;
 		}
 
 		$sales_rate = (float) $this->current_rate_data['sales_tax_rate'];
@@ -603,11 +724,15 @@ class ZipTax_Tax_Handler {
 			return $matched_tax_rates;
 		}
 
+		$rate_id = $this->ensure_current_rate_id();
+		if ( null === $rate_id ) {
+			return $matched_tax_rates;
+		}
+
 		$rate_pct = round( $sales_rate * 100, 4 );
 
-		// Replace whatever WooCommerce found with our API rate.
 		return array(
-			$this->current_rate_id => array(
+			$rate_id => array(
 				'rate'     => $rate_pct,
 				'label'    => __( 'Sales Tax', 'ziptax-sales-tax' ),
 				'shipping' => $this->tax_shipping ? 'yes' : 'no',
@@ -623,10 +748,12 @@ class ZipTax_Tax_Handler {
 	/**
 	 * Apply TIC-specific rates to individual cart items.
 	 *
-	 * If any product has a TIC code that results in a different rate than
-	 * the general rate, we override the tax for those specific items.
-	 * WooCommerce has already calculated taxes using the general rate;
-	 * we only adjust items that need a different TIC rate.
+	 * Only adjusts items for which Zip Tax actually supplied the rate —
+	 * i.e. items whose tax class is standard AND whose calculated line
+	 * tax was keyed by our injected rate ID. Items routed to a
+	 * merchant-defined rate (because the customer's location has a
+	 * user-configured Standard Rate, or because the product is in a
+	 * non-standard tax class) are left alone.
 	 *
 	 * @param WC_Cart $cart
 	 */
@@ -648,16 +775,21 @@ class ZipTax_Tax_Handler {
 		$sales_rate = (float) $this->current_rate_data['sales_tax_rate'];
 		$rate_id    = $this->current_rate_id;
 
-		// Collect TIC codes from cart items.
+		// Collect TIC codes from cart items in the standard tax class only.
 		$has_tic = false;
 		foreach ( $cart->get_cart() as $cart_item ) {
 			$product = $cart_item['data'];
-			if ( $product && $product->is_taxable() ) {
-				$tic = (int) $product->get_meta( '_ziptax_tic_code' );
-				if ( $tic > 0 ) {
-					$has_tic = true;
-					break;
-				}
+			if ( ! $product || ! $product->is_taxable() ) {
+				continue;
+			}
+			$item_tax_class = $product->get_tax_class();
+			if ( '' !== $item_tax_class && 'standard' !== $item_tax_class ) {
+				continue;
+			}
+			$tic = (int) $product->get_meta( '_ziptax_tic_code' );
+			if ( $tic > 0 ) {
+				$has_tic = true;
+				break;
 			}
 		}
 
@@ -677,6 +809,21 @@ class ZipTax_Tax_Handler {
 			foreach ( $cart->get_cart() as $cart_key => $cart_item ) {
 				$product = $cart_item['data'];
 				if ( ! $product || ! $product->is_taxable() ) {
+					continue;
+				}
+
+				// Non-standard tax classes use merchant-defined rates as-is.
+				$item_tax_class = $product->get_tax_class();
+				if ( '' !== $item_tax_class && 'standard' !== $item_tax_class ) {
+					continue;
+				}
+
+				// Only adjust items whose tax was actually calculated against
+				// our injected rate. If a merchant-defined Standard Rate won
+				// for this location, $line_tax_data is keyed by that rate ID
+				// and we leave the item alone.
+				$line_total_data = $cart_item['line_tax_data']['total'] ?? array();
+				if ( ! isset( $line_total_data[ $rate_id ] ) ) {
 					continue;
 				}
 
