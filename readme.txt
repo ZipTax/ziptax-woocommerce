@@ -3,7 +3,7 @@ Contributors: ziptax
 Tags: tax, sales tax, tax calculation, woocommerce tax, ziptax
 Requires at least: 6.0
 Tested up to: 6.9
-Stable tag: 3.3.1
+Stable tag: 3.3.11
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
@@ -63,6 +63,49 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 == Changelog ==
 
+= 3.3.11 =
+* Maintenance release. No functional changes since 3.3.10; version bump for release packaging.
+
+= 3.3.10 =
+* Change: The customer-facing tax label now reads "Sales Tax" for both the plugin's API rate and any merchant Reduced rate / Zero rate / custom-class row applied as a location-based override. Admin screens (Tax settings, tax reports, order edit) keep the merchant's chosen rate name so the configuration UI is unchanged.
+
+= 3.3.9 =
+* Fix: Reduced rate and Zero rate rows now correctly override the API rate on the standard tax line when their Country/State/Postcode/City matches the customer's address — even when the cart product is in the Standard tax class. Previously these merchant rows only applied to products explicitly assigned to their class, because `WC_Tax::find_rates(tax_class='standard')` does not return rows whose `tax_rate_class` is non-empty.
+* Improvement: Plugin now performs a dedicated lookup for non-standard merchant rows during `prefetch_rate()` and stores the match for the request. Match granularity is identical to `WC_Tax::find_rates()`: country and state with `''` wildcards, postcode via `wc_get_wildcard_postcodes()` (so stored entries like `9021*`, `902**`, ranges like `90210...90220` all work), and city against `wc_tax_rate_locations`.
+
+= 3.3.8 =
+* Confirmed: Reduced rate and Zero rate rows match the customer's location at the same four levels Standard rates use — Country, State, Postcode (with WooCommerce's full wildcard and range support, e.g. `9021*`, `902**`, `90210...90220`), and City. Matching is delegated to `WC_Tax::find_rates()` so coverage is identical across every tax class.
+* Improvement: Debug log now records, for every non-standard-class lookup, whether a merchant rate matched and at which Country/State/Postcode/City — visible under WooCommerce > Status > Logs when **Debug logging** is enabled in the Zip Tax integration settings.
+
+= 3.3.7 =
+* Change: Tax-rate precedence is now per-class instead of a broad backoff:
+    - **Standard rates**: the API rate always wins. The plugin upserts the API value into a Standard rates row keyed by Country + State + Postcode + City; merchant-added Standard rate rows are not used at runtime.
+    - **Reduced rate rates**: when a merchant Reduced rate row matches the customer's Country/State/Postcode/City, that row's rate is used. When no Reduced rate row matches, the API rate is used as the fallback.
+    - **Zero rate rates / custom classes**: same pattern as Reduced rate — merchant row when matched, API rate when not.
+* Fix: Reduced rate rates now consistently override the API rate the same way Zero rate rates do.
+
+= 3.3.6 =
+* Fix: Sales Tax line is restored on cart and checkout. The 3.3.5 change that invalidated WooCommerce's "taxes" cache on every rate-row update broke rate-id continuity inside `calculate_totals()` and caused the tax line to disappear. Reverted that change; the freshness it was protecting against is already handled because `inject_tax_rate()` overrides the rate value with the latest API result regardless of WC's cached rate value.
+
+= 3.3.5 =
+* Fix: Cart and checkout pages built with the WooCommerce Cart and Checkout blocks now also trigger a forced tax recalculation on page load, not just pages set as the WC cart/checkout page in the WooCommerce page settings.
+* Fix: Forced recalculation is also hooked on `template_redirect` (in addition to `wp`), so it runs reliably under themes whose template loading skips one or the other.
+* Fix: WooCommerce's `taxes` cache group is now invalidated whenever the plugin's existing rate row is updated with a new API value — previously it was only invalidated on row insert, so changes to an existing row's rate were not picked up by `WC_Tax::find_rates()` until the cache expired.
+
+= 3.3.4 =
+* Change: The cart and checkout tax line for plugin-managed rates now reads "Sales Tax" instead of the internal "ZipTax Sales Tax" marker. The DB row name is unchanged so the precedence logic that distinguishes plugin rows from merchant rows still works.
+
+= 3.3.3 =
+* Fix: Sales tax is now recalculated on every cart and checkout page load, not just when the cart contents change. WooCommerce was serving session-cached totals on plain page revisits without firing the tax pipeline, which left the tax line stale.
+* Fix: Sales tax is recalculated immediately after the customer saves a new shipping or billing address from the My Account > Addresses form.
+* Confirmed: Reduced rate rates configured under WooCommerce > Settings > Tax > Reduced rate rates take precedence over the Zip Tax rate for matching locations, matching the existing behavior for Zero rate rates and Standard rates.
+
+= 3.3.2 =
+* Change: The plugin's Standard Rate row is now refreshed on every API lookup so its stored rate stays in sync with the latest API result. The row is still ignored at runtime whenever the merchant has configured their own rate for the location, so this never overrides merchant settings — it just keeps the fallback row current.
+* Fix: Zero rate rates (and Reduced rate / custom-class rates) now correctly suppress the Zip Tax rate for any location they cover. Any merchant-configured rate row that matches the customer's country/state/postcode/city causes Zip Tax to back off, regardless of the cart product's tax class.
+* Fix: Plugin-managed rate rows are now unique by Country + State + Postcode + City. Previously two concurrent carts in different ZIPs of the same city could overwrite each other's rate row.
+* Improvement: Postcode is now stored in `wc_tax_rate_locations` alongside city for plugin-created rate rows.
+
 = 3.3.1 =
 * Fix: Stale Zip Tax rate rows persisted in `wc_tax_rates` (kept for order reporting) could be matched by WooCommerce on their own and apply an outdated rate — for example, taxing a location covered by a Zero Rate Rates entry. Zip Tax-managed rows are now always stripped from WooCommerce's matched rates and only apply when the plugin actively injects a freshly calculated rate.
 * Improvement: API lookups now request `addressDetailExtended`, so the geocoded city, county, state, and postal code returned by the API are used to key rate rows to the exact jurisdiction matched. Previously the extended address block was never returned, and rate rows could be created without state or city location data, causing them to match unrelated locations.
@@ -112,6 +155,36 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 * Initial release.
 
 == Upgrade Notice ==
+
+= 3.3.11 =
+Maintenance release with no functional changes. Update to stay current with the 3.3.x series.
+
+= 3.3.10 =
+Cart, checkout, order, and email tax lines now read "Sales Tax" regardless of whether the rate came from the API or from a merchant Reduced/Zero/custom rate row used as an override. Admin screens still show the merchant's chosen rate names.
+
+= 3.3.9 =
+Reduced rate and Zero rate rows now override the API rate for matching locations even when the cart product is in the Standard tax class. A Zero rate row for US/TX zero-rates the standard tax line in TX; a Reduced rate row for US/CA/92694 applies that rate to the standard tax line at that ZIP.
+
+= 3.3.8 =
+Reduced rate and Zero rate now confirmed to match at the same four levels Standard rate uses: Country, State, Postcode (with wildcard/range support), and City. Adds debug logging that records each non-standard-class match decision.
+
+= 3.3.7 =
+Tax-rate precedence is now per-class. Standard rates always come from the API. Reduced rate and Zero rate rows configured under Tax settings override the API for products in those classes when they match the customer's location, and fall back to the API when they do not.
+
+= 3.3.6 =
+Restores the Sales Tax line on cart and checkout — fixes a 3.3.5 regression where invalidating WooCommerce's "taxes" cache mid-calculation caused the tax line to disappear.
+
+= 3.3.5 =
+Tax recalculation reliability: block-based cart and checkout pages now refresh on load, the recalc trigger is hooked at both `wp` and `template_redirect`, and updates to an existing plugin rate row now invalidate WooCommerce's tax cache.
+
+= 3.3.4 =
+The cart tax label for plugin-managed rates now displays "Sales Tax" instead of the internal "ZipTax Sales Tax" marker.
+
+= 3.3.3 =
+Tax recalculation fixes: tax now refreshes on every cart and checkout page load, and immediately after the customer saves a new address. Reduced rate rates are confirmed to take precedence the same way Zero rate rates and Standard rates do.
+
+= 3.3.2 =
+The plugin's Standard Rate row is now refreshed on every API lookup, keeping its stored rate in sync with the latest API result. Zero rate / Reduced rate / custom-class rates now suppress Zip Tax for any location they cover, and plugin-managed rate rows are unique by Country + State + Postcode + City to prevent concurrent-cart collisions.
 
 = 3.3.1 =
 Bug fix: stale Zip Tax rate rows can no longer apply on their own, which could show sales tax for locations covered by merchant-configured Zero Rate Rates.
