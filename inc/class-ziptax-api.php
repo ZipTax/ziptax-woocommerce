@@ -77,10 +77,14 @@ class ZipTax_API {
 		}
 
 		// Only send `address` — no postalcode, city, or state parameters.
+		// addressDetailExtended returns the geocoded address broken into
+		// components (city, county, state, postal code), which are used to
+		// key rate rows to the exact jurisdiction the API matched.
 		$params = array(
-			'key'     => $this->api_key,
-			'format'  => 'json',
-			'address' => $address_string,
+			'key'                   => $this->api_key,
+			'format'                => 'json',
+			'address'               => $address_string,
+			'addressDetailExtended' => 'true',
 		);
 
 		// Country support.
@@ -216,8 +220,10 @@ class ZipTax_API {
 	 *     @type string $sourcing         "D" for destination, "O" for origin.
 	 *     @type string $city             City from address detail.
 	 *     @type string $state            State from address detail.
+	 *     @type string $county           County from address detail.
 	 *     @type string $postcode         Postal code from address detail.
 	 *     @type string $country          Country code.
+	 *     @type bool   $incorporated     Whether the location is in an incorporated area.
 	 *     @type array  $base_rates       Individual jurisdiction rate components.
 	 *     @type array  $product_detail   Product-specific TIC detail (if requested).
 	 *     @type array  $raw              Full raw API response.
@@ -232,8 +238,10 @@ class ZipTax_API {
 			'sourcing'        => 'D',
 			'city'            => '',
 			'state'           => '',
+			'county'          => '',
 			'postcode'        => '',
 			'country'         => 'US',
+			'incorporated'    => false,
 			'base_rates'      => array(),
 			'product_detail'  => array(),
 			'raw'             => $data,
@@ -282,18 +290,20 @@ class ZipTax_API {
 			$result['sourcing'] = $data['sourcingRules']['value'];
 		}
 
-		// Address detail.
+		// Address detail. The nested `address` block is only present when
+		// the request was made with addressDetailExtended=true.
 		if ( isset( $data['addressDetail'] ) ) {
 			$ad = $data['addressDetail'];
-			$result['city']     = $ad['address']['city']      ?? '';
-			$result['state']    = $ad['address']['stateCode'] ?? '';
-			$result['postcode'] = $ad['address']['postalCode'] ?? '';
+			$result['city']         = $ad['address']['city']       ?? '';
+			$result['state']        = $ad['address']['stateCode']  ?? '';
+			$result['county']       = $ad['address']['county']     ?? '';
+			$result['postcode']     = $ad['address']['postalCode'] ?? '';
+			$result['incorporated'] = ( 'true' === ( $ad['incorporated'] ?? '' ) );
 
 			$country_code = $ad['address']['countryCode'] ?? 'USA';
 			$result['country'] = ( 'CAN' === $country_code ) ? 'CA' : 'US';
 
-			// Fallback: if nested address block is missing, use top-level fields.
-			if ( empty( $result['city'] ) && ! empty( $ad['normalizedAddress'] ) ) {
+			if ( ! empty( $ad['normalizedAddress'] ) ) {
 				$result['normalized_address'] = $ad['normalizedAddress'];
 			}
 		}

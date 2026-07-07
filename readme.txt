@@ -3,7 +3,7 @@ Contributors: ziptax
 Tags: tax, sales tax, tax calculation, woocommerce tax, ziptax
 Requires at least: 6.0
 Tested up to: 6.9
-Stable tag: 3.3.0
+Stable tag: 3.3.1
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
@@ -63,6 +63,10 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 == Changelog ==
 
+= 3.3.1 =
+* Fix: Stale Zip Tax rate rows persisted in `wc_tax_rates` (kept for order reporting) could be matched by WooCommerce on their own and apply an outdated rate — for example, taxing a location covered by a Zero Rate Rates entry. Zip Tax-managed rows are now always stripped from WooCommerce's matched rates and only apply when the plugin actively injects a freshly calculated rate.
+* Improvement: API lookups now request `addressDetailExtended`, so the geocoded city, county, state, and postal code returned by the API are used to key rate rows to the exact jurisdiction matched. Previously the extended address block was never returned, and rate rows could be created without state or city location data, causing them to match unrelated locations.
+
 = 3.3.0 =
 * Fix: Merchant-configured tax rates now take precedence over Zip Tax. Standard Rates, Reduced Rate Rates, Zero Rate Rates, and any other rates configured under WooCommerce > Settings > Tax are no longer overwritten by the API rate.
 * Change: The plugin no longer modifies WooCommerce tax options (Enable taxes, Calculate tax based on, Display, Rounding, etc.). Merchants fully own those settings.
@@ -108,6 +112,9 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 * Initial release.
 
 == Upgrade Notice ==
+
+= 3.3.1 =
+Bug fix: stale Zip Tax rate rows can no longer apply on their own, which could show sales tax for locations covered by merchant-configured Zero Rate Rates.
 
 = 3.3.0 =
 Merchant-configured WooCommerce tax rates (Standard, Reduced, Zero, etc.) now take precedence over Zip Tax. The plugin no longer modifies WooCommerce tax options or overwrites manually configured rate tables.
