@@ -683,27 +683,23 @@ class ZipTax_Tax_Handler {
 	 *   2. For the standard class, any rate the merchant configured for
 	 *      this location wins. Zip Tax only fills in when WooCommerce
 	 *      finds no user-defined rate.
-	 *   3. Unsupported countries are returned untouched.
+	 *   3. Unsupported countries only ever use merchant-defined rates.
 	 *
 	 * The plugin never modifies WooCommerce tax options or overwrites
 	 * merchant-configured rate rows; it only adds a fallback rate for
 	 * locations the merchant has not configured.
+	 *
+	 * ZipTax-managed rows persisted in wc_tax_rates (kept for order
+	 * reporting) are always stripped from WooCommerce's matched rates.
+	 * They only ever apply through the explicit injection below, so a
+	 * stale row from a previous lookup can never tax a request the
+	 * plugin did not calculate a rate for.
 	 *
 	 * @param array $matched_tax_rates Existing matched rates from WC_Tax.
 	 * @param array $args              Location arguments (country, state, postcode, city, tax_class).
 	 * @return array
 	 */
 	public function inject_tax_rate( $matched_tax_rates, $args ) {
-		// No prefetched data — nothing to inject; respect whatever WC found.
-		if ( null === $this->current_rate_data ) {
-			return $matched_tax_rates;
-		}
-
-		$country = $args['country'] ?? '';
-		if ( ! $this->is_supported_country( $country ) ) {
-			return $matched_tax_rates;
-		}
-
 		// Respect WooCommerce tax classes — only consider injecting on the standard class.
 		// "Zero Rate", "Reduced Rate", and other custom classes always use the
 		// merchant's WooCommerce-configured rates.
@@ -713,20 +709,32 @@ class ZipTax_Tax_Handler {
 		}
 
 		// Merchant-configured Standard Rates (or any non-ZipTax rate WC found
-		// for this location) take precedence over our API rate.
+		// for this location) take precedence over our API rate. ZipTax-managed
+		// rows are removed so they never apply on their own.
 		$user_rates = $this->filter_to_user_defined_rates( $matched_tax_rates );
+
+		// No prefetched data — nothing to inject; only merchant rates may apply.
+		if ( null === $this->current_rate_data ) {
+			return $user_rates;
+		}
+
+		$country = $args['country'] ?? '';
+		if ( ! $this->is_supported_country( $country ) ) {
+			return $user_rates;
+		}
+
 		if ( ! empty( $user_rates ) ) {
 			return $user_rates;
 		}
 
 		$sales_rate = (float) $this->current_rate_data['sales_tax_rate'];
 		if ( $sales_rate <= 0 ) {
-			return $matched_tax_rates;
+			return $user_rates;
 		}
 
 		$rate_id = $this->ensure_current_rate_id();
 		if ( null === $rate_id ) {
-			return $matched_tax_rates;
+			return $user_rates;
 		}
 
 		$rate_pct = round( $sales_rate * 100, 4 );
