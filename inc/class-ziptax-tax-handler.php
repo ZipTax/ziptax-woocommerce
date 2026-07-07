@@ -853,8 +853,9 @@ class ZipTax_Tax_Handler {
 	 * rate, Zero rate, or any custom class) and whose Country/State/
 	 * Postcode/City matches the customer's address using the same
 	 * matching rules WC_Tax::find_rates() applies — country and state
-	 * with `''` wildcards, postcode via wc_get_wildcard_postcodes(), and
-	 * city via wc_tax_rate_locations.
+	 * with `''` wildcards, postcode via wc_get_wildcard_postcodes() plus
+	 * numeric range rows (e.g. 90210...90220), and city via
+	 * wc_tax_rate_locations.
 	 *
 	 * Plugin-owned rows (tax_rate_name = self::RATE_NAME) are excluded.
 	 * When multiple rows match, WooCommerce's natural priority/order
@@ -884,6 +885,21 @@ class ZipTax_Tax_Handler {
 		$query_args   = array( self::RATE_NAME, $country, $state, $city );
 		$query_args   = array_merge( $query_args, $valid_postcodes );
 
+		// Postcode match: exact and wildcard patterns come from
+		// wc_get_wildcard_postcodes(); WooCommerce's range syntax
+		// (e.g. 90210...90220) is not expanded by that helper, so rows
+		// stored as ranges are matched numerically here, the same way
+		// WC_Tax::find_rates() does. Ranges only apply to numeric
+		// postcodes (US ZIPs) — Canadian postal codes never match one.
+		$zip_match_sql = "zip_loc.location_code IS NULL OR zip_loc.location_code IN ($postcode_placeholders)";
+		if ( ctype_digit( $postcode ) ) {
+			$zip_match_sql .= " OR ( zip_loc.location_code LIKE '%%...%%'
+			       AND CAST( SUBSTRING_INDEX( zip_loc.location_code, '...', 1 ) AS UNSIGNED ) <= %d
+			       AND CAST( SUBSTRING_INDEX( zip_loc.location_code, '...', -1 ) AS UNSIGNED ) >= %d )";
+			$query_args[] = $postcode;
+			$query_args[] = $postcode;
+		}
+
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$row = $wpdb->get_row( $wpdb->prepare(
 			"SELECT tr.tax_rate_id,
@@ -902,7 +918,7 @@ class ZipTax_Tax_Handler {
 			   AND tr.tax_rate_country IN ('', %s)
 			   AND tr.tax_rate_state   IN ('', %s)
 			   AND ( city_loc.location_code IS NULL OR city_loc.location_code = %s )
-			   AND ( zip_loc.location_code  IS NULL OR zip_loc.location_code IN ($postcode_placeholders) )
+			   AND ( $zip_match_sql )
 			 ORDER BY tr.tax_rate_priority ASC, tr.tax_rate_order ASC
 			 LIMIT 1",
 			$query_args
