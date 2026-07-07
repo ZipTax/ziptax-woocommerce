@@ -215,6 +215,7 @@ class ZipTax_Tax_Handler {
 		$parts = array(
 			'ziptax',
 			strtolower( $address['address_1'] ?? '' ),
+			strtolower( $address['address_2'] ?? '' ),
 			strtolower( $address['city'] ?? '' ),
 			strtolower( $address['state'] ?? '' ),
 			strtolower( $address['postcode'] ?? '' ),
