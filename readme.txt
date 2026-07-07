@@ -3,7 +3,7 @@ Contributors: ziptax
 Tags: tax, sales tax, tax calculation, woocommerce tax, ziptax
 Requires at least: 6.0
 Tested up to: 6.9
-Stable tag: 3.3.11
+Stable tag: 3.3.12
 Requires PHP: 7.4
 WC requires at least: 8.0
 WC tested up to: 9.6
@@ -63,9 +63,12 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 == Changelog ==
 
-= 3.3.11 =
+= 3.3.12 =
 * Fix: Merchant override rows stored with WooCommerce's postcode range syntax (e.g. `90210...90220`) now match the customer's location. Previously only exact and wildcard postcode entries matched during the override lookup.
 * Fix: The customer-facing "Sales Tax" label rewrite now applies only to the merchant row used as the current request's location-based override. Products genuinely assigned to a Reduced rate / Zero rate / custom tax class keep the merchant's configured label (e.g. "GST").
+
+= 3.3.11 =
+* Maintenance release. Version bump only; no functional changes since 3.3.10.
 
 = 3.3.10 =
 * Change: The customer-facing tax label now reads "Sales Tax" for both the plugin's API rate and any merchant Reduced rate / Zero rate / custom-class row applied as a location-based override. Admin screens (Tax settings, tax reports, order edit) keep the merchant's chosen rate name so the configuration UI is unchanged.
@@ -157,8 +160,11 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 == Upgrade Notice ==
 
-= 3.3.11 =
+= 3.3.12 =
 Bug fixes: postcode ranges (e.g. 90210...90220) now match in the merchant override lookup, and the "Sales Tax" label rewrite is scoped to override rows only — products in a Reduced/Zero/custom tax class keep the merchant's configured label.
+
+= 3.3.11 =
+Maintenance release with no functional changes.
 
 = 3.3.10 =
 Cart, checkout, order, and email tax lines now read "Sales Tax" regardless of whether the rate came from the API or from a merchant Reduced/Zero/custom rate row used as an override. Admin screens still show the merchant's chosen rate names.
