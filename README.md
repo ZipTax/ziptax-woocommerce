@@ -67,7 +67,8 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 
 ### 3.3.11
 
-- Maintenance release. No functional changes since 3.3.10; version bump for release packaging.
+- Fix: Merchant override rows stored with WooCommerce's postcode range syntax (e.g. `90210...90220`) now match the customer's location. Previously only exact and wildcard postcode entries matched during the override lookup.
+- Fix: The customer-facing "Sales Tax" label rewrite now applies only to the merchant row used as the current request's location-based override. Products genuinely assigned to a Reduced rate / Zero rate / custom tax class keep the merchant's configured label (e.g. "GST").
 
 ### 3.3.10
 

@@ -48,15 +48,6 @@ class ZipTax_Tax_Handler {
 	private $ziptax_owned_rate_ids = array();
 
 	/**
-	 * Per-request cache for "is this rate ID a non-standard merchant
-	 * row?" — used by filter_rate_label() to rewrite customer-facing
-	 * labels to "Sales Tax" without re-querying the DB on every render.
-	 *
-	 * @var array<int,bool>
-	 */
-	private $non_standard_merchant_cache = array();
-
-	/**
 	 * The WooCommerce tax rate ID for the API rate, upserted into the
 	 * Standard rates table on every cart calculation.
 	 *
@@ -633,22 +624,21 @@ class ZipTax_Tax_Handler {
 	}
 
 	/**
-	 * Rewrite the displayed tax label so the customer always sees
-	 * "Sales Tax" — regardless of whether the rate came from the
-	 * plugin's own row or from a merchant Reduced rate / Zero rate /
-	 * custom-class row that the plugin used as a location-based
-	 * override.
+	 * Rewrite the displayed tax label so the customer sees "Sales Tax"
+	 * for rates the plugin supplied.
 	 *
 	 *   - Plugin-owned rows (tax_rate_name = self::RATE_NAME) are
 	 *     rewritten in every context (admin and front-end).
-	 *   - Non-standard merchant rows (tax_rate_class != '') are
-	 *     rewritten only on customer-facing renders (front-end pages
-	 *     and front-end AJAX) so that admin screens — Tax settings,
-	 *     tax reports, order edit — keep the merchant's chosen rate
-	 *     name. The check `is_admin() && ! wp_doing_ajax()` matches
-	 *     strictly admin requests; cart fragment AJAX (which routes
-	 *     through admin-ajax.php and so reports `is_admin() === true`)
-	 *     correctly falls through to the rewrite.
+	 *   - A merchant Reduced rate / Zero rate / custom-class row is
+	 *     rewritten ONLY when it is the row applied as this request's
+	 *     location-based override on the standard tax line. When the
+	 *     same row matches the normal WooCommerce way — because the
+	 *     product is genuinely assigned to that tax class — the
+	 *     merchant's configured label (e.g. "GST") is kept.
+	 *
+	 * The override is only computed during front-end cart calculation,
+	 * so strictly-admin renders (Tax settings, tax reports, order edit)
+	 * always keep the merchant's rate name.
 	 *
 	 * @param string $label Current label (the DB tax_rate_name).
 	 * @param mixed  $rate  Rate ID (int) or rate object passed to get_rate_label().
@@ -659,8 +649,7 @@ class ZipTax_Tax_Handler {
 			return __( 'Sales Tax', 'ziptax-sales-tax' );
 		}
 
-		// Strictly admin requests keep the merchant's rate name.
-		if ( is_admin() && ! wp_doing_ajax() ) {
+		if ( null === $this->merchant_override ) {
 			return $label;
 		}
 
@@ -668,46 +657,11 @@ class ZipTax_Tax_Handler {
 			? (int) ( isset( $rate->tax_rate_id ) ? $rate->tax_rate_id : 0 )
 			: (int) $rate;
 
-		if ( $rate_id > 0 && $this->is_non_standard_merchant_row( $rate_id ) ) {
+		if ( $rate_id === $this->merchant_override['id'] ) {
 			return __( 'Sales Tax', 'ziptax-sales-tax' );
 		}
 
 		return $label;
-	}
-
-	/**
-	 * Whether the given rate ID points to a non-standard merchant row
-	 * (Reduced rate / Zero rate / custom class) — the kind the plugin
-	 * uses as a location-based override on the standard tax line, and
-	 * also the kind WC matches directly for products in those classes.
-	 *
-	 * Result is memoized for the request to avoid repeated DB hits when
-	 * filter_rate_label() runs many times during a single page render.
-	 *
-	 * @param int $rate_id Tax rate ID.
-	 * @return bool
-	 */
-	private function is_non_standard_merchant_row( $rate_id ) {
-		if ( array_key_exists( $rate_id, $this->non_standard_merchant_cache ) ) {
-			return $this->non_standard_merchant_cache[ $rate_id ];
-		}
-
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$found = (bool) $wpdb->get_var( $wpdb->prepare(
-			"SELECT 1
-			 FROM {$wpdb->prefix}woocommerce_tax_rates
-			 WHERE tax_rate_id = %d
-			   AND tax_rate_name != %s
-			   AND tax_rate_class != ''
-			 LIMIT 1",
-			$rate_id,
-			self::RATE_NAME
-		) );
-
-		$this->non_standard_merchant_cache[ $rate_id ] = $found;
-		return $found;
 	}
 
 	// ------------------------------------------------------------------
