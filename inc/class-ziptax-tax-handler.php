@@ -48,15 +48,28 @@ class ZipTax_Tax_Handler {
 	private $ziptax_owned_rate_ids = array();
 
 	/**
-	 * The WooCommerce tax rate ID for the current rate.
-	 *
-	 * Created lazily the first time we actually inject the API rate so
-	 * we don't write to the wc_tax_rates table when user-defined rates
-	 * already cover the customer's location.
+	 * The WooCommerce tax rate ID for the API rate, upserted into the
+	 * Standard rates table on every cart calculation.
 	 *
 	 * @var int|null
 	 */
 	private $current_rate_id = null;
+
+	/**
+	 * Non-standard merchant rate row that overrides the API rate for the
+	 * current customer's location, or null when no override applies.
+	 *
+	 * Computed once per request in prefetch_rate(). Keys:
+	 *   - id        (int)    tax_rate_id
+	 *   - rate_pct  (float)  percentage already in WC's "rate" format
+	 *   - label     (string) tax_rate_name from the DB
+	 *   - shipping  (string) "yes" / "no"
+	 *   - compound  (string) "yes" / "no"
+	 *   - class     (string) tax_rate_class slug, for logging only
+	 *
+	 * @var array|null
+	 */
+	private $merchant_override = null;
 
 	/**
 	 * Whether shipping should be taxed for the current request.
@@ -103,6 +116,21 @@ class ZipTax_Tax_Handler {
 
 		// Apply TIC-specific rates per cart item.
 		add_action( 'woocommerce_after_calculate_totals', array( $this, 'apply_tic_rates' ), 20 );
+
+		// Force a fresh cart recalculation on cart and checkout page loads
+		// and when the customer saves a new address. WooCommerce can serve
+		// session-cached totals without re-firing woocommerce_before_calculate_totals,
+		// which would leave the tax line stale until the cart contents change.
+		// Hooked at both `wp` and `template_redirect` so we fire whichever
+		// runs first on the active theme/template path.
+		add_action( 'wp', array( $this, 'force_cart_recalculation' ), 100 );
+		add_action( 'template_redirect', array( $this, 'force_cart_recalculation' ), 100 );
+		add_action( 'woocommerce_customer_save_address', array( $this, 'invalidate_and_recalculate' ), 10 );
+
+		// Display plugin-owned rate rows as "Sales Tax" in cart/checkout
+		// totals even though the DB stores them under the internal
+		// RATE_NAME marker we use to identify our own rows.
+		add_filter( 'woocommerce_rate_label', array( $this, 'filter_rate_label' ), 10, 2 );
 
 		// Transfer per-item tax data to order line items at checkout.
 		add_action( 'woocommerce_checkout_create_order_line_item', array( $this, 'set_order_line_item_tax' ), 10, 4 );
@@ -198,6 +226,7 @@ class ZipTax_Tax_Handler {
 		$this->current_rate_data = null;
 		$this->current_rate_id   = null;
 		$this->tax_shipping      = false;
+		$this->merchant_override = null;
 	}
 
 	// ------------------------------------------------------------------
@@ -319,64 +348,60 @@ class ZipTax_Tax_Handler {
 	/**
 	 * Find or create a per-jurisdiction WooCommerce tax rate row.
 	 *
-	 * Each unique country+state+city combination gets its own row so that
-	 * WooCommerce tax reports, admin order views, and third-party tools
-	 * can display accurate jurisdiction details for historical orders.
+	 * Each unique country+state+postcode+city combination gets its own
+	 * row. Including postcode is essential under concurrent checkout
+	 * load — without it, two carts in different ZIPs of the same city
+	 * race on the same row and overwrite each other's rates.
 	 *
-	 * The rate percentage is updated on each request to stay current.
+	 * Postcode and city are stored in wc_tax_rate_locations. The lookup
+	 * matches by all four fields exactly so the plugin only ever updates
+	 * a row it created for the same jurisdiction.
+	 *
+	 * The rate percentage is refreshed on each request to stay current.
 	 * Orphaned rows (not referenced by any order) are cleaned up daily
-	 * by the cleanup_orphaned_rates cron.
+	 * by the cleanup_orphaned_rates cron; rows still referenced by orders
+	 * are kept for historical reporting.
 	 *
 	 * @param float  $rate     Decimal rate (e.g. 0.0775).
 	 * @param string $state    State code.
 	 * @param string $city     City name.
+	 * @param string $postcode Postal / ZIP code.
 	 * @param string $country  Country code.
 	 * @param bool   $shipping Whether this rate applies to shipping.
 	 * @return int Tax rate ID.
 	 */
-	private function get_or_create_tax_rate_id( $rate, $state, $city, $country, $shipping = false ) {
+	private function get_or_create_tax_rate_id( $rate, $state, $city, $postcode, $country, $shipping = false ) {
 		global $wpdb;
 
 		$rate_pct   = round( $rate * 100, 4 );
-		$city_upper = strtoupper( $city );
+		$city_upper = strtoupper( wc_clean( $city ) );
+		$zip_upper  = strtoupper( wc_normalize_postcode( wc_clean( $postcode ) ) );
 		$ship_flag  = $shipping ? 1 : 0;
 
-		// Look for an existing row matching this jurisdiction.
-		// City is stored in the separate woocommerce_tax_rate_locations table,
-		// so we join on it (or check for rows with no city location when empty).
+		// Look for an existing ZipTax-owned row matching this exact jurisdiction.
+		// City and postcode live in wc_tax_rate_locations, so we left-join both
+		// and use IFNULL so rows missing one of the constraints still match
+		// when the lookup value is empty.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		if ( '' !== $city_upper ) {
-			$existing = $wpdb->get_var( $wpdb->prepare(
-				"SELECT tr.tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates tr
-				 INNER JOIN {$wpdb->prefix}woocommerce_tax_rate_locations loc
-				     ON tr.tax_rate_id = loc.tax_rate_id AND loc.location_type = 'city'
-				 WHERE tr.tax_rate_name = %s
-				   AND tr.tax_rate_country = %s
-				   AND tr.tax_rate_state = %s
-				   AND loc.location_code = %s
-				   AND tr.tax_rate_class = ''
-				 LIMIT 1",
-				self::RATE_NAME,
-				$country,
-				$state,
-				$city_upper
-			) );
-		} else {
-			$existing = $wpdb->get_var( $wpdb->prepare(
-				"SELECT tr.tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates tr
-				 LEFT JOIN {$wpdb->prefix}woocommerce_tax_rate_locations loc
-				     ON tr.tax_rate_id = loc.tax_rate_id AND loc.location_type = 'city'
-				 WHERE tr.tax_rate_name = %s
-				   AND tr.tax_rate_country = %s
-				   AND tr.tax_rate_state = %s
-				   AND loc.location_code IS NULL
-				   AND tr.tax_rate_class = ''
-				 LIMIT 1",
-				self::RATE_NAME,
-				$country,
-				$state
-			) );
-		}
+		$existing = $wpdb->get_var( $wpdb->prepare(
+			"SELECT tr.tax_rate_id FROM {$wpdb->prefix}woocommerce_tax_rates tr
+			 LEFT JOIN {$wpdb->prefix}woocommerce_tax_rate_locations city_loc
+			     ON tr.tax_rate_id = city_loc.tax_rate_id AND city_loc.location_type = 'city'
+			 LEFT JOIN {$wpdb->prefix}woocommerce_tax_rate_locations zip_loc
+			     ON tr.tax_rate_id = zip_loc.tax_rate_id AND zip_loc.location_type = 'postcode'
+			 WHERE tr.tax_rate_name = %s
+			   AND tr.tax_rate_country = %s
+			   AND tr.tax_rate_state = %s
+			   AND IFNULL( city_loc.location_code, '' ) = %s
+			   AND IFNULL( zip_loc.location_code, '' ) = %s
+			   AND tr.tax_rate_class = ''
+			 LIMIT 1",
+			self::RATE_NAME,
+			$country,
+			$state,
+			$city_upper,
+			$zip_upper
+		) );
 
 		if ( $existing ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -390,6 +415,13 @@ class ZipTax_Tax_Handler {
 				array( '%f', '%d' ),
 				array( '%d' )
 			);
+
+			// We deliberately do NOT invalidate WC's "taxes" cache here.
+			// Invalidating mid-calculate_totals broke rate-id continuity in
+			// 3.3.5 — inject_tax_rate() already overrides the rate value
+			// with the freshly-fetched API result, so the cached rate value
+			// for our row is irrelevant to what the customer is charged.
+
 			ZipTax_WooCommerce::log( sprintf( 'Updated tax rate ID %d to %.4f%%', $existing, $rate_pct ) );
 			return (int) $existing;
 		}
@@ -407,12 +439,23 @@ class ZipTax_Tax_Handler {
 			'tax_rate_class'    => '',
 		) );
 
-		// Store the city in the locations table.
+		// Store city and postcode in wc_tax_rate_locations.
 		if ( '' !== $city_upper ) {
 			WC_Tax::_update_tax_rate_cities( $rate_id, $city_upper );
 		}
+		if ( '' !== $zip_upper ) {
+			WC_Tax::_update_tax_rate_postcodes( $rate_id, $zip_upper );
+		}
 
-		ZipTax_WooCommerce::log( sprintf( 'Created tax rate ID %d at %.4f%%', $rate_id, $rate_pct ) );
+		ZipTax_WooCommerce::log( sprintf(
+			'Created tax rate ID %d at %.4f%% (%s/%s/%s/%s)',
+			$rate_id,
+			$rate_pct,
+			$country,
+			$state,
+			$zip_upper,
+			$city_upper
+		) );
 
 		WC_Cache_Helper::invalidate_cache_group( 'taxes' );
 
@@ -488,11 +531,146 @@ class ZipTax_Tax_Handler {
 	}
 
 	// ------------------------------------------------------------------
+	// Hooks: cart-load and address-change recalculation triggers
+	// ------------------------------------------------------------------
+
+	/**
+	 * Tracks whether force_cart_recalculation() already ran for this
+	 * request, since it is hooked to both `wp` and `template_redirect`
+	 * as a belt-and-braces measure.
+	 *
+	 * @var bool
+	 */
+	private $force_recalc_done = false;
+
+	/**
+	 * Force WooCommerce to recalculate cart totals on cart and checkout
+	 * page loads.
+	 *
+	 * WooCommerce stores cart totals in the session and on a plain cart-
+	 * or checkout-page revisit it can render those stored totals without
+	 * firing woocommerce_before_calculate_totals. That leaves the tax
+	 * line stale (e.g. after the customer changed their My Account
+	 * address, or while cache entries refresh). Forcing calculate_totals()
+	 * here re-runs the full pipeline — including prefetch_rate() and
+	 * inject_tax_rate() — every time the customer lands on the cart or
+	 * checkout page.
+	 *
+	 * Detects three layouts:
+	 *   1. Pages set as the WC cart or checkout page (shortcodes).
+	 *   2. Any singular page that contains the woocommerce/cart or
+	 *      woocommerce/checkout block — covers block-based stores that
+	 *      use a custom page outside the WC page settings.
+	 *   3. Block templates that include cart/checkout blocks (best-effort
+	 *      via has_block on the global $post when available).
+	 *
+	 * AJAX, REST, and admin contexts are skipped — those paths either
+	 * already trigger calculate_totals() themselves (AJAX cart fragments,
+	 * Store API) or do not render the cart.
+	 */
+	public function force_cart_recalculation() {
+		if ( $this->force_recalc_done || self::$is_calculating ) {
+			return;
+		}
+		if ( wp_doing_ajax() || wp_doing_cron() || is_admin() ) {
+			return;
+		}
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return;
+		}
+		if ( ! WC()->cart || WC()->cart->is_empty() ) {
+			return;
+		}
+
+		$is_cart_or_checkout = false;
+
+		if ( function_exists( 'is_cart' ) && is_cart() ) {
+			$is_cart_or_checkout = true;
+		} elseif ( function_exists( 'is_checkout' ) && is_checkout() ) {
+			$is_cart_or_checkout = true;
+		} elseif ( function_exists( 'has_block' ) ) {
+			// Block-based stores — page may not be the configured WC cart/checkout
+			// page, but contains the cart or checkout block.
+			global $post;
+			if ( $post && ( has_block( 'woocommerce/cart', $post ) || has_block( 'woocommerce/checkout', $post ) ) ) {
+				$is_cart_or_checkout = true;
+			}
+		}
+
+		if ( ! $is_cart_or_checkout ) {
+			return;
+		}
+
+		$this->force_recalc_done = true;
+		WC()->cart->calculate_totals();
+	}
+
+	/**
+	 * Recalculate the cart after the customer saves a new address.
+	 *
+	 * Fires from the My Account "Addresses" form. The new address is
+	 * already stored on WC()->customer; calling calculate_totals() runs
+	 * prefetch_rate() against it so the next cart/checkout view shows
+	 * the correct rate immediately, without waiting for the customer
+	 * to change cart contents.
+	 */
+	public function invalidate_and_recalculate() {
+		if ( self::$is_calculating ) {
+			return;
+		}
+		if ( WC()->cart && ! WC()->cart->is_empty() ) {
+			WC()->cart->calculate_totals();
+		}
+	}
+
+	/**
+	 * Rewrite the displayed tax label so the customer sees "Sales Tax"
+	 * for rates the plugin supplied.
+	 *
+	 *   - Plugin-owned rows (tax_rate_name = self::RATE_NAME) are
+	 *     rewritten in every context (admin and front-end).
+	 *   - A merchant Reduced rate / Zero rate / custom-class row is
+	 *     rewritten ONLY when it is the row applied as this request's
+	 *     location-based override on the standard tax line. When the
+	 *     same row matches the normal WooCommerce way — because the
+	 *     product is genuinely assigned to that tax class — the
+	 *     merchant's configured label (e.g. "GST") is kept.
+	 *
+	 * The override is only computed during front-end cart calculation,
+	 * so strictly-admin renders (Tax settings, tax reports, order edit)
+	 * always keep the merchant's rate name.
+	 *
+	 * @param string $label Current label (the DB tax_rate_name).
+	 * @param mixed  $rate  Rate ID (int) or rate object passed to get_rate_label().
+	 * @return string
+	 */
+	public function filter_rate_label( $label, $rate ) {
+		if ( self::RATE_NAME === $label ) {
+			return __( 'Sales Tax', 'ziptax-sales-tax' );
+		}
+
+		if ( null === $this->merchant_override ) {
+			return $label;
+		}
+
+		$rate_id = is_object( $rate )
+			? (int) ( isset( $rate->tax_rate_id ) ? $rate->tax_rate_id : 0 )
+			: (int) $rate;
+
+		if ( $rate_id === $this->merchant_override['id'] ) {
+			return __( 'Sales Tax', 'ziptax-sales-tax' );
+		}
+
+		return $label;
+	}
+
+	// ------------------------------------------------------------------
 	// Hook: woocommerce_before_calculate_totals
 	// ------------------------------------------------------------------
 
 	/**
-	 * Pre-fetch the API tax rate before WooCommerce calculates totals.
+	 * Pre-fetch the API tax rate before WooCommerce calculates totals,
+	 * and refresh the plugin's Standard Rate row to match.
 	 *
 	 * Tax is only calculated when the shipping address is fully populated
 	 * (address_1, city, state, postcode). The three-tier cache inside
@@ -500,9 +678,15 @@ class ZipTax_Tax_Handler {
 	 * calls when the address is unchanged; the rate is automatically
 	 * refreshed whenever the address changes.
 	 *
-	 * No wc_tax_rates row is written here — it's created lazily inside
-	 * inject_tax_rate() only when no user-defined rate covers the
-	 * location, so we never insert rows the merchant didn't ask for.
+	 * On every lookup that yields a positive API rate the plugin's
+	 * Standard Rate row for the resolved jurisdiction is upserted so its
+	 * stored rate stays in sync with the API. The row is uniquely keyed
+	 * on Country + State + Postcode + City, so concurrent carts in
+	 * different jurisdictions never overwrite each other. The row is
+	 * still ignored at runtime by inject_tax_rate() whenever the
+	 * merchant has configured their own rate for the location, so the
+	 * upsert never overrides merchant settings — it just keeps the
+	 * fallback row current.
 	 *
 	 * @param WC_Cart $cart
 	 */
@@ -562,53 +746,45 @@ class ZipTax_Tax_Handler {
 			$this->tax_shipping = ! empty( $rate_data['freight_taxable'] );
 		}
 
-		ZipTax_WooCommerce::log( sprintf(
-			'Rate ready: %.4f%% (ship_tax=%s)',
-			$sales_rate * 100,
-			$this->tax_shipping ? 'yes' : 'no'
-		) );
-	}
-
-	/**
-	 * Lazily create or update the wc_tax_rates row for the API rate.
-	 *
-	 * Called from inject_tax_rate() only when we actually need to inject
-	 * — i.e. when no user-defined rate covers the location. Caches the
-	 * resulting rate ID for the rest of the request.
-	 *
-	 * @return int|null Tax rate ID, or null if we have no API rate to inject.
-	 */
-	private function ensure_current_rate_id() {
-		if ( null !== $this->current_rate_id ) {
-			return $this->current_rate_id;
+		// Look up a non-standard merchant override for the customer's
+		// location (Reduced rate / Zero rate / custom class). When one
+		// matches, it replaces the API rate on the standard tax line at
+		// inject time — regardless of which tax class the cart product
+		// is in.
+		$this->merchant_override = $this->find_merchant_override( $address );
+		if ( $this->merchant_override ) {
+			ZipTax_WooCommerce::log( sprintf(
+				'Merchant override row %d (%s class, %.4f%%) will replace the API rate (%.4f%%) for this lookup',
+				$this->merchant_override['id'],
+				$this->merchant_override['class'],
+				$this->merchant_override['rate_pct'],
+				$sales_rate * 100
+			) );
 		}
 
-		if ( null === $this->current_rate_data ) {
-			return null;
-		}
-
-		$sales_rate = (float) $this->current_rate_data['sales_tax_rate'];
+		// At 0% there's nothing to inject and nothing useful to store.
 		if ( $sales_rate <= 0 ) {
-			return null;
+			ZipTax_WooCommerce::log( sprintf(
+				'Rate ready: %.4f%% (no row, ship_tax=%s)',
+				$sales_rate * 100,
+				$this->tax_shipping ? 'yes' : 'no'
+			) );
+			return;
 		}
 
-		$customer = WC()->customer;
-		if ( ! $customer ) {
-			return null;
-		}
-
-		$address = $this->get_customer_address( $customer );
-
+		// Refresh the plugin's Standard Rate row with this lookup's result.
 		// Prefer the geocoded jurisdiction returned by the API
 		// (addressDetailExtended); fall back to the customer-entered
 		// address when a component is empty.
-		$state = ( $this->current_rate_data['state'] ?? '' ) !== '' ? $this->current_rate_data['state'] : $address['state'];
-		$city  = ( $this->current_rate_data['city'] ?? '' ) !== '' ? $this->current_rate_data['city'] : $address['city'];
+		$api_state    = $rate_data['state']    ?? '';
+		$api_city     = $rate_data['city']     ?? '';
+		$api_postcode = $rate_data['postcode'] ?? '';
 
 		$this->current_rate_id = $this->get_or_create_tax_rate_id(
 			$sales_rate,
-			$state,
-			$city,
+			'' !== $api_state    ? $api_state    : $address['state'],
+			'' !== $api_city     ? $api_city     : $address['city'],
+			'' !== $api_postcode ? $api_postcode : $address['postcode'],
 			$address['country'],
 			$this->tax_shipping
 		);
@@ -616,20 +792,113 @@ class ZipTax_Tax_Handler {
 		$this->ziptax_owned_rate_ids[ $this->current_rate_id ] = true;
 
 		ZipTax_WooCommerce::log( sprintf(
-			'Injected ZipTax rate ID %d at %.4f%%',
+			'Rate ready: %.4f%% (ID %d, ship_tax=%s)',
+			$sales_rate * 100,
 			$this->current_rate_id,
-			$sales_rate * 100
+			$this->tax_shipping ? 'yes' : 'no'
+		) );
+	}
+
+	/**
+	 * Find a non-standard merchant tax-rate row that overrides the API
+	 * rate for the customer's location.
+	 *
+	 * Looks for any row whose tax_rate_class is non-empty (i.e. Reduced
+	 * rate, Zero rate, or any custom class) and whose Country/State/
+	 * Postcode/City matches the customer's address using the same
+	 * matching rules WC_Tax::find_rates() applies — country and state
+	 * with `''` wildcards, postcode via wc_get_wildcard_postcodes() plus
+	 * numeric range rows (e.g. 90210...90220), and city via
+	 * wc_tax_rate_locations.
+	 *
+	 * Plugin-owned rows (tax_rate_name = self::RATE_NAME) are excluded.
+	 * When multiple rows match, WooCommerce's natural priority/order
+	 * applies and we take the first.
+	 *
+	 * @param array $address Location with country/state/postcode/city.
+	 * @return array|null Row data, or null when nothing matches.
+	 */
+	private function find_merchant_override( array $address ) {
+		$country  = strtoupper( $address['country'] ?? '' );
+		$state    = strtoupper( $address['state'] ?? '' );
+		$city     = strtoupper( wc_clean( $address['city'] ?? '' ) );
+		$postcode = strtoupper( wc_normalize_postcode( wc_clean( $address['postcode'] ?? '' ) ) );
+
+		$valid_postcodes = function_exists( 'wc_get_wildcard_postcodes' )
+			? wc_get_wildcard_postcodes( $postcode, $country )
+			: array( $postcode );
+
+		if ( empty( $valid_postcodes ) ) {
+			$valid_postcodes = array( $postcode );
+		}
+
+		global $wpdb;
+
+		$postcode_placeholders = implode( ',', array_fill( 0, count( $valid_postcodes ), '%s' ) );
+
+		$query_args   = array( self::RATE_NAME, $country, $state, $city );
+		$query_args   = array_merge( $query_args, $valid_postcodes );
+
+		// Postcode match: exact and wildcard patterns come from
+		// wc_get_wildcard_postcodes(); WooCommerce's range syntax
+		// (e.g. 90210...90220) is not expanded by that helper, so rows
+		// stored as ranges are matched numerically here, the same way
+		// WC_Tax::find_rates() does. Ranges only apply to numeric
+		// postcodes (US ZIPs) — Canadian postal codes never match one.
+		$zip_match_sql = "zip_loc.location_code IS NULL OR zip_loc.location_code IN ($postcode_placeholders)";
+		if ( ctype_digit( $postcode ) ) {
+			$zip_match_sql .= " OR ( zip_loc.location_code LIKE '%%...%%'
+			       AND CAST( SUBSTRING_INDEX( zip_loc.location_code, '...', 1 ) AS UNSIGNED ) <= %d
+			       AND CAST( SUBSTRING_INDEX( zip_loc.location_code, '...', -1 ) AS UNSIGNED ) >= %d )";
+			$query_args[] = $postcode;
+			$query_args[] = $postcode;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$row = $wpdb->get_row( $wpdb->prepare(
+			"SELECT tr.tax_rate_id,
+			        tr.tax_rate,
+			        tr.tax_rate_name,
+			        tr.tax_rate_class,
+			        tr.tax_rate_shipping,
+			        tr.tax_rate_compound
+			 FROM {$wpdb->prefix}woocommerce_tax_rates tr
+			 LEFT JOIN {$wpdb->prefix}woocommerce_tax_rate_locations city_loc
+			     ON tr.tax_rate_id = city_loc.tax_rate_id AND city_loc.location_type = 'city'
+			 LEFT JOIN {$wpdb->prefix}woocommerce_tax_rate_locations zip_loc
+			     ON tr.tax_rate_id = zip_loc.tax_rate_id AND zip_loc.location_type = 'postcode'
+			 WHERE tr.tax_rate_name != %s
+			   AND tr.tax_rate_class != ''
+			   AND tr.tax_rate_country IN ('', %s)
+			   AND tr.tax_rate_state   IN ('', %s)
+			   AND ( city_loc.location_code IS NULL OR city_loc.location_code = %s )
+			   AND ( $zip_match_sql )
+			 ORDER BY tr.tax_rate_priority ASC, tr.tax_rate_order ASC
+			 LIMIT 1",
+			$query_args
 		) );
 
-		return $this->current_rate_id;
+		if ( ! $row ) {
+			return null;
+		}
+
+		return array(
+			'id'       => (int) $row->tax_rate_id,
+			'rate_pct' => round( (float) $row->tax_rate, 4 ),
+			'label'    => (string) $row->tax_rate_name,
+			'shipping' => ( '1' === (string) $row->tax_rate_shipping ) ? 'yes' : 'no',
+			'compound' => ( '1' === (string) $row->tax_rate_compound ) ? 'yes' : 'no',
+			'class'    => (string) $row->tax_rate_class,
+		);
 	}
 
 	/**
 	 * Return only the rate IDs that were NOT created by this plugin.
 	 *
-	 * Used to detect when the merchant has manually configured tax rates
-	 * for the customer's location/tax class. Any non-ZipTax rate present
-	 * in WooCommerce's matched rates is treated as user-defined and wins.
+	 * Used in the non-standard tax class branch of inject_tax_rate() to
+	 * strip plugin-owned rate rows out of WooCommerce's matched rates
+	 * before deciding whether the merchant has a Reduced rate / Zero
+	 * rate / custom-class row matching the customer's location.
 	 *
 	 * @param array $matched_tax_rates Rate map keyed by tax_rate_id.
 	 * @return array Subset of $matched_tax_rates that the merchant defined.
@@ -683,18 +952,36 @@ class ZipTax_Tax_Handler {
 	/**
 	 * Inject the ZipTax rate into WooCommerce's native tax rate lookup.
 	 *
-	 * Precedence rules:
-	 *   1. Non-standard tax classes (zero-rate, reduced-rate, custom
-	 *      classes) are returned untouched — WooCommerce's configured
-	 *      rates always apply.
-	 *   2. For the standard class, any rate the merchant configured for
-	 *      this location wins. Zip Tax only fills in when WooCommerce
-	 *      finds no user-defined rate.
-	 *   3. Unsupported countries only ever use merchant-defined rates.
+	 * Precedence applied per find_rates() call:
 	 *
-	 * The plugin never modifies WooCommerce tax options or overwrites
-	 * merchant-configured rate rows; it only adds a fallback rate for
-	 * locations the merchant has not configured.
+	 *   1. Unsupported country: merchant-defined rates only.
+	 *   2. No prefetched API data and no merchant override: merchant-
+	 *      defined rates only.
+	 *   3. Standard class (tax_class is '' or 'standard'):
+	 *        a. If a non-standard merchant row matches the customer's
+	 *           location (computed in prefetch_rate via
+	 *           find_merchant_override()), that row's rate replaces the
+	 *           API rate on this lookup. This covers the case where the
+	 *           merchant added a Reduced rate row for US/CA/92694 or a
+	 *           Zero rate row for US/TX and expects it to override the
+	 *           sales tax on every product, not just on products
+	 *           assigned to that tax class.
+	 *        b. Otherwise the API rate wins. Merchant-added Standard
+	 *           rate rows are not used at runtime — the plugin's row,
+	 *           upserted from the API, is the authoritative Standard
+	 *           rate.
+	 *   4. Non-standard class (Reduced rate, Zero rate, custom):
+	 *        a. If WC_Tax::find_rates() matched a merchant row in this
+	 *           class for the customer's location, return it.
+	 *        b. Otherwise inject the API rate as a fallback so products
+	 *           in non-standard classes are still taxed correctly when
+	 *           the merchant has not configured a class-specific row.
+	 *
+	 * Match granularity for the location-based override and for
+	 * WC_Tax::find_rates() is identical: Country (with `''` wildcard),
+	 * State (with `''` wildcard), Postcode (with wc_get_wildcard_postcodes
+	 * expansion + WC range support like `90210...90220`), and City
+	 * (against wc_tax_rate_locations).
 	 *
 	 * ZipTax-managed rows persisted in wc_tax_rates (kept for order
 	 * reporting) are always stripped from WooCommerce's matched rates.
@@ -707,21 +994,14 @@ class ZipTax_Tax_Handler {
 	 * @return array
 	 */
 	public function inject_tax_rate( $matched_tax_rates, $args ) {
-		// Respect WooCommerce tax classes — only consider injecting on the standard class.
-		// "Zero Rate", "Reduced Rate", and other custom classes always use the
-		// merchant's WooCommerce-configured rates.
-		$tax_class = $args['tax_class'] ?? '';
-		if ( '' !== $tax_class && 'standard' !== $tax_class ) {
-			return $matched_tax_rates;
-		}
-
-		// Merchant-configured Standard Rates (or any non-ZipTax rate WC found
-		// for this location) take precedence over our API rate. ZipTax-managed
-		// rows are removed so they never apply on their own.
+		// Strip ZipTax-managed rows so they never apply on their own —
+		// they only ever reach the customer through the explicit
+		// injection below.
 		$user_rates = $this->filter_to_user_defined_rates( $matched_tax_rates );
 
-		// No prefetched data — nothing to inject; only merchant rates may apply.
-		if ( null === $this->current_rate_data ) {
+		// No prefetched API data and no precomputed override — nothing to
+		// inject; only merchant rates may apply.
+		if ( null === $this->current_rate_data && null === $this->merchant_override ) {
 			return $user_rates;
 		}
 
@@ -730,7 +1010,61 @@ class ZipTax_Tax_Handler {
 			return $user_rates;
 		}
 
-		if ( ! empty( $user_rates ) ) {
+		$tax_class         = $args['tax_class'] ?? '';
+		$is_standard_class = ( '' === $tax_class || 'standard' === $tax_class );
+
+		// Standard class: a location-matched non-standard merchant row
+		// (Reduced rate / Zero rate / custom) replaces the API rate.
+		if ( $is_standard_class && $this->merchant_override ) {
+			ZipTax_WooCommerce::log( sprintf(
+				'Standard tax line: applying merchant override row %d (%s class) at %.4f%% for %s/%s/%s/%s',
+				$this->merchant_override['id'],
+				$this->merchant_override['class'],
+				$this->merchant_override['rate_pct'],
+				$args['country']  ?? '',
+				$args['state']    ?? '',
+				$args['postcode'] ?? '',
+				$args['city']     ?? ''
+			) );
+			return array(
+				$this->merchant_override['id'] => array(
+					'rate'     => $this->merchant_override['rate_pct'],
+					'label'    => $this->merchant_override['label'],
+					'shipping' => $this->merchant_override['shipping'],
+					'compound' => $this->merchant_override['compound'],
+				),
+			);
+		}
+
+		// Non-standard class: defer to whatever WC matched in this class.
+		// If a merchant row exists for this class+location, return it.
+		// Otherwise fall through to the API rate.
+		if ( ! $is_standard_class ) {
+			if ( ! empty( $user_rates ) ) {
+				ZipTax_WooCommerce::log( sprintf(
+					'Merchant %s rate matched for %s/%s/%s/%s — using rate IDs: %s',
+					$tax_class,
+					$args['country']  ?? '',
+					$args['state']    ?? '',
+					$args['postcode'] ?? '',
+					$args['city']     ?? '',
+					implode( ',', array_keys( $user_rates ) )
+				) );
+				return $user_rates;
+			}
+			ZipTax_WooCommerce::log( sprintf(
+				'No merchant %s rate matched for %s/%s/%s/%s — falling back to API rate',
+				$tax_class,
+				$args['country']  ?? '',
+				$args['state']    ?? '',
+				$args['postcode'] ?? '',
+				$args['city']     ?? ''
+			) );
+			// Fall through to the API rate injection below.
+		}
+
+		// API rate fallback. Requires a prefetched plugin row with a positive rate.
+		if ( null === $this->current_rate_id || null === $this->current_rate_data ) {
 			return $user_rates;
 		}
 
@@ -739,15 +1073,10 @@ class ZipTax_Tax_Handler {
 			return $user_rates;
 		}
 
-		$rate_id = $this->ensure_current_rate_id();
-		if ( null === $rate_id ) {
-			return $user_rates;
-		}
-
 		$rate_pct = round( $sales_rate * 100, 4 );
 
 		return array(
-			$rate_id => array(
+			$this->current_rate_id => array(
 				'rate'     => $rate_pct,
 				'label'    => __( 'Sales Tax', 'ziptax-sales-tax' ),
 				'shipping' => $this->tax_shipping ? 'yes' : 'no',
