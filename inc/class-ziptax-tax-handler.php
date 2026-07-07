@@ -598,10 +598,16 @@ class ZipTax_Tax_Handler {
 
 		$address = $this->get_customer_address( $customer );
 
+		// Prefer the geocoded jurisdiction returned by the API
+		// (addressDetailExtended); fall back to the customer-entered
+		// address when a component is empty.
+		$state = ( $this->current_rate_data['state'] ?? '' ) !== '' ? $this->current_rate_data['state'] : $address['state'];
+		$city  = ( $this->current_rate_data['city'] ?? '' ) !== '' ? $this->current_rate_data['city'] : $address['city'];
+
 		$this->current_rate_id = $this->get_or_create_tax_rate_id(
 			$sales_rate,
-			$this->current_rate_data['state'] ?? $address['state'],
-			$this->current_rate_data['city']  ?? $address['city'],
+			$state,
+			$city,
 			$address['country'],
 			$this->tax_shipping
 		);
